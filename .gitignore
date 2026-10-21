@@ -33,38 +33,82 @@ venv/
 ENV/
 env/
 
-# Tooling and caches
+# Tooling, test caches & reports
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 .cache/
-
-# Test generated outputs and temporary scratch files
-fixtures/
-scratch_test_enc/
-smoke_out.pdf
-smoke_report.json
-*.tmp.*
-*.wmclean_state.json
-*.report.json
+coverage.xml
 
 # Operating System files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDE and Editor files
+# IDE, Editor & Agent local files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.agents/
+.system_generated/
 
-# Local planning and prompt files
+# Credentials, tokens, secrets & environments
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.token
+*.pat
+secrets/
+credentials/
+
+# Sensitive & Personal Documents, Test PDFs & Diagnostic Artifacts
+Documents/
+documents/
+tmp_diag/
+diag/
+diagnostics/
+test_docs/
+samples/
+inputs/
+outputs/
+fixtures/
+scratch_test_enc/
+scratch/
+
+# All raw and processed document binaries
+*.pdf
+*.docx
+*.doc
+*.pptx
+*.xlsx
+
+# Processed reports, state checkpoints & temp swap files
+smoke_out.pdf
+smoke_report.json
+*.tmp.*
+*.wmclean_state.json
+*.report.json
+*report*.json
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Internal agent planning, prompt, and scratch markdown files
 repo-polish.md
-last-step-agent-friendly.md
+wm-update.md
 execution_plan.md
-project-plan-and-implementation.md
+last-step-agent-friendly.md
 prior_art_analysis.md
+project-plan-and-implementation.md
+*.draft.md
+*.notes.md
+*.prompt.md
+notes/

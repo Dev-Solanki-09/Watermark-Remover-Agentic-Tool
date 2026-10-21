@@ -273,3 +273,8 @@ class StreamProcessor:
                 result.append(entry.raw)
         return result
 
+
+# Aliases for API compatibility
+ContentStreamAST = StreamProcessor
+OperationNode = StreamProcessor.Entry
+

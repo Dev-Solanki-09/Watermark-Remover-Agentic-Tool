@@ -4,18 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watermark-remover-auto-agent-tool"
-version = "1.0.0"
+version = "0.0.2a0"
 description = "CPU-only PDF watermark removal tool with deterministic verification and agent-friendly operational contracts"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "watermark-remover-auto-agent-tool contributors" }]
 keywords = ["pdf", "watermark", "remover", "agent", "agent-tool", "pikepdf", "verification", "cpu-only"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -28,12 +27,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "pikepdf>=8.0",
-    "PyMuPDF>=1.23",
+    "pikepdf>=9.0",
+    "PyMuPDF>=1.28.2",
     "numpy>=1.24",
     "opencv-python-headless>=4.8",
     "Pillow>=10.0",
     "pydantic>=2.0",
+    "scipy>=1.12",
+    "scikit-image>=0.22",
+    "doxapy>=0.9.4",
 ]
 
 [project.optional-dependencies]

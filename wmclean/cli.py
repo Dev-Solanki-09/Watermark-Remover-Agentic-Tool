@@ -69,6 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
     batch_p.add_argument("--enable-ml-fallback", action="store_true")
     batch_p.add_argument("--allow-size-growth", action="store_true")
 
+    # --- plan ---
+    plan_p = sub.add_parser("plan", help="Dry-run surgical intelligence planner")
+    plan_p.add_argument("input", help="Input PDF path")
+    plan_p.add_argument("--json", dest="json_out", default=None, help="Save plan as JSON")
+    plan_p.add_argument("--password", default=None, help="PDF user password")
+
     # --- inspect ---
     inspect_p = sub.add_parser("inspect", help="Dry-run probe (no modification)")
     inspect_p.add_argument("input", help="Input PDF path")
@@ -115,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "run":
             return _cmd_run(args)
+        elif args.command == "plan":
+            return _cmd_plan(args)
         elif args.command == "batch":
             return _cmd_batch(args)
         elif args.command == "inspect":
@@ -246,9 +254,108 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_plan(args: argparse.Namespace) -> int:
+    """Execute dry-run surgical intelligence planner (Gatekeeper L0 + L0.5)."""
+    import json
+    import time
+
+    from wmclean.intelligence.gatekeeper import Gatekeeper
+    from wmclean.orchestrator import Orchestrator
+
+    in_path = Path(args.input)
+    if not in_path.exists():
+        print(f"Error: file {in_path} not found", file=sys.stderr)
+        return 40
+
+    t0 = time.monotonic()
+    orch = Orchestrator(
+        input_path=str(in_path),
+        output_path="dummy.pdf",
+        password=args.password,
+    )
+    pdf = orch._open_pdf()
+    records = orch._pass1_probe(pdf)
+    pdf.close()
+
+    gk = Gatekeeper()
+    plans = gk.plan_document(records, reservoir=getattr(orch, "reservoir", None))
+    elapsed = time.monotonic() - t0
+
+    num_pages = len(records)
+    subdoc_count = len(set(p.subdoc_id for p in plans)) if plans else 1
+
+    print(f"WMCLEAN PLAN | {in_path.name} ({num_pages} pages, {subdoc_count} sub-docs) | est_time={elapsed:.1f}s | llm_tokens=0")
+
+    def _task_summary(plan, rec) -> str:
+        if plan.is_untouched:
+            return f"UNTOUCHED ({plan.reason})"
+        tasks_str = ", ".join(t.method.value for t in plan.tasks)
+        rois = [t.roi_bbox for t in plan.tasks if t.roi_bbox is not None]
+        if rois:
+            mb = rec.geom.mb if rec.geom else [0, 0, 595, 842]
+            w_px = max(1, int(abs(mb[2] - mb[0]) * 150 / 72))
+            h_px = max(1, int(abs(mb[3] - mb[1]) * 150 / 72))
+            norm_rois = [
+                f"[{r[0]/w_px:.2f},{r[1]/h_px:.2f},{r[2]/w_px:.2f},{r[3]/h_px:.2f}]"
+                for r in rois
+            ]
+            return f"{tasks_str} @ roi={','.join(norm_rois)}"
+        return tasks_str
+
+    groups = []
+    for plan, rec in zip(plans, records):
+        summary = _task_summary(plan, rec)
+        kind_str = rec.kind.value
+        key = (plan.subdoc_id, kind_str, summary)
+        if groups and groups[-1]["key"] == key and groups[-1]["end"] == plan.page - 1:
+            groups[-1]["end"] = plan.page
+        else:
+            groups.append({
+                "key": key,
+                "start": plan.page,
+                "end": plan.page,
+                "subdoc": plan.subdoc_id + 1,
+                "kind": kind_str,
+                "summary": summary,
+            })
+
+    for g in groups:
+        if g["start"] == g["end"]:
+            page_str = f"p  {g['start']:<2d}"
+        else:
+            page_str = f"pp {g['start']:d}-{g['end']:d}"
+        print(f"  {page_str:<11} [subdoc {g['subdoc']}, {g['kind']}] : {g['summary']}")
+
+    if getattr(args, "json_out", None):
+        plan_data = {
+            "file": str(in_path),
+            "pages": num_pages,
+            "subdocs": subdoc_count,
+            "est_time": round(elapsed, 2),
+            "groups": groups,
+            "plans": [
+                {
+                    "page": p.page,
+                    "subdoc": p.subdoc_id + 1,
+                    "untouched": p.is_untouched,
+                    "tasks": [
+                        {"method": t.method.value, "roi_bbox": t.roi_bbox, "confidence": t.confidence}
+                        for t in p.tasks
+                    ],
+                }
+                for p in plans
+            ],
+        }
+        Path(args.json_out).write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
+
+    return 0
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Pre-flight self-diagnostics."""
     import sqlite3
+
+    from wmclean.deps import has_doxapy, has_pymatting, has_rapidocr, has_scipy, has_skimage
 
     passes = []
 
@@ -270,6 +377,20 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         passes.append("[PASS] Core dependencies (pikepdf, pymupdf, cv2, numpy, PIL, pydantic, sqlite3)")
     else:
         passes.append(f"[FAIL] Missing dependencies: {', '.join(missing)}")
+
+    # SOTA open-source vision & OCR libraries
+    sota_status = []
+    if has_scipy():
+        sota_status.append("scipy")
+    if has_skimage():
+        sota_status.append("scikit-image")
+    if has_doxapy():
+        sota_status.append("doxapy")
+    if has_pymatting():
+        sota_status.append("pymatting")
+    if has_rapidocr():
+        sota_status.append("rapidocr")
+    passes.append(f"[PASS] SOTA extensions active: {', '.join(sota_status) if sota_status else 'none'}")
 
     # 3. Temp directory write permissions
     try:

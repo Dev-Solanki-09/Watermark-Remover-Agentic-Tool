@@ -12,7 +12,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import pikepdf
 
@@ -24,6 +24,7 @@ from wmclean.schemas import (
     PageState,
     PerfReport,
     RemoverMethod,
+    RemoverParams,
 )
 
 
@@ -115,7 +116,7 @@ class Orchestrator:
         """L0: Probe all pages. Returns list of ProbeRecords."""
         import pymupdf
 
-        from wmclean.probe.raster_stats import probe_raster
+        from wmclean.probe.raster_stats import RasterReservoir, probe_raster
         from wmclean.probe.structural import probe_structural
 
         records = []
@@ -127,12 +128,37 @@ class Orchestrator:
         except Exception:
             fitz_doc = None
 
+        reservoir = RasterReservoir()
+        self.reservoir = reservoir
         try:
             for page_num in range(len(pdf.pages)):
                 fitz_page = fitz_doc[page_num] if fitz_doc and page_num < len(fitz_doc) else None
                 record = probe_structural(pdf, page_num, fitz_page=fitz_page)
-                record = probe_raster(pdf, page_num, record, fitz_doc=fitz_doc)
+                record = probe_raster(pdf, page_num, record, reservoir=reservoir, fitz_doc=fitz_doc)
                 records.append(record)
+
+            # Update initial pages with the completed cross-page reservoir statistics
+            for rec in records:
+                if rec.ras_stats and rec.ras_stats.has_raster and rec.ras_stats.tmpl_ncc == 0.0:
+                    mb = rec.geom.mb if rec.geom else [0, 0, 595, 842]
+                    tw = int(mb[2] * 150 / 72)
+                    th = int(mb[3] * 150 / 72)
+                    tmpl = reservoir.get_template(tw, th)
+                    if tmpl is not None:
+                        key = reservoir._bucket_key(tw, th)
+                        bucket = reservoir.buckets.get(key)
+                        if bucket and (rec.p - 1) in bucket.page_indices:
+                            s_idx = bucket.page_indices.index(rec.p - 1)
+                            s_grey = bucket.samples[s_idx]
+                            from wmclean.probe.raster_stats import _compute_template_ncc
+                            ncc, cov = _compute_template_ncc(s_grey, tmpl)
+                            rec.ras_stats.tmpl_ncc = ncc
+                            rec.ras_stats.tmpl_cov = cov
+                            if ncc >= 0.5:
+                                rec.ras_stats.pos_stab = ncc
+                        else:
+                            rec.ras_stats.pos_stab = 0.85
+                            rec.ras_stats.tmpl_ncc = 0.85
         finally:
             if fitz_doc is not None:
                 fitz_doc.close()
@@ -151,18 +177,28 @@ class Orchestrator:
     def _pass2_process(self, pdf: pikepdf.Pdf, probe_records: list, decision) -> list[PageReport]:
         """L3 → L4 → L5 for each page with checkpoint/resume and VerificationEngine."""
         from wmclean.cluster.signature import compute_signature
+        from wmclean.intelligence.gatekeeper import Gatekeeper
+        from wmclean.removers.piracy_ocr import piracy_ocr_spotter, swt_morph_reconstruct
         from wmclean.removers.raster_ops import (
+            illum_flatten,
+            inverted_banner_strip,
             raster_alpha_inv,
             raster_bitonal_despeckle,
             raster_cc_inpaint,
             raster_color_unmix,
+            raster_dark_stamp_consensus,
             raster_fft_notch,
+            raster_hue_selective_unmix,
             raster_luma_sep,
+            raster_margin_banner,
+            raster_registered_outline_clean,
             raster_template_whiten,
         )
+        from wmclean.removers.stain_deconv import beer_lambert_stain_unmix
         from wmclean.removers.vector_ops import (
             annot_del,
             artifact_strip,
+            ast_tj_reassemble,
             clip_scope_strip,
             ocg_strip,
             pattern_sh_strip,
@@ -170,6 +206,7 @@ class Orchestrator:
             smask_gs_strip,
             text_op_strip,
             vec_path_strip,
+            vec_spatial_band_cluster,
             xobj_do_strip,
         )
         from wmclean.verify.engine import VerificationEngine
@@ -185,17 +222,32 @@ class Orchestrator:
             RemoverMethod.PATTERN_SH_STRIP: pattern_sh_strip,
             RemoverMethod.SMASK_GS_STRIP: smask_gs_strip,
             RemoverMethod.REV_ROLLBACK: rev_rollback,
+            RemoverMethod.AST_TJ_REASSEMBLE: ast_tj_reassemble,
+            RemoverMethod.VEC_SPATIAL_BAND_CLUSTER: vec_spatial_band_cluster,
             RemoverMethod.RASTER_TEMPLATE_WHITEN: raster_template_whiten,
             RemoverMethod.RASTER_ALPHA_INV: raster_alpha_inv,
             RemoverMethod.RASTER_COLOR_UNMIX: raster_color_unmix,
+            RemoverMethod.RASTER_HUE_SELECTIVE_UNMIX: raster_hue_selective_unmix,
             RemoverMethod.RASTER_LUMA_SEP: raster_luma_sep,
             RemoverMethod.RASTER_FFT_NOTCH: raster_fft_notch,
             RemoverMethod.RASTER_CC_INPAINT: raster_cc_inpaint,
             RemoverMethod.RASTER_BITONAL_DESPECKLE: raster_bitonal_despeckle,
+            RemoverMethod.RASTER_MARGIN_BANNER: raster_margin_banner,
+            RemoverMethod.INVERTED_BANNER_STRIP: inverted_banner_strip,
+            RemoverMethod.RASTER_DARK_STAMP_CONSENSUS: raster_dark_stamp_consensus,
+            RemoverMethod.RASTER_REGISTERED_OUTLINE_CLEAN: raster_registered_outline_clean,
+            RemoverMethod.PIRACY_OCR_SPOTTER: piracy_ocr_spotter,
+            RemoverMethod.ILLUM_FLATTEN: illum_flatten,
+            RemoverMethod.SWT_MORPH_RECONSTRUCT: swt_morph_reconstruct,
+            RemoverMethod.BEER_LAMBERT_STAIN_UNMIX: beer_lambert_stain_unmix,
         }
 
         action_map = {act.sig_hash: act for act in decision.clusters}
         engine = VerificationEngine()
+        gatekeeper = Gatekeeper(target_dpi=150)
+        dispatch_plans = gatekeeper.plan_document(probe_records, reservoir=getattr(self, "reservoir", None))
+        plan_map = {p.page: p for p in dispatch_plans}
+
         page_reports = []
         state_file = self.output_path.with_name(f"{self.output_path.name}.wmclean_state.json")
         saved_state = {}
@@ -215,8 +267,11 @@ class Orchestrator:
             t0 = time.monotonic()
             sig = compute_signature(record)
             action = action_map.get(sig.sig_hash)
+            page_plan = plan_map.get(p_num)
 
-            if not action or action.action == "SKIP" or not action.chain:
+            # L0.5 Gatekeeper negative presence veto:
+            # If the gatekeeper scheduled 0 tasks for this page, mark UNTOUCHED immediately in 0ms!
+            if page_plan and page_plan.is_untouched:
                 pr = PageReport(
                     p=p_num,
                     st=PageState.UNTOUCHED,
@@ -227,11 +282,32 @@ class Orchestrator:
                     saved_state[str(p_num)] = pr.model_dump()
                 continue
 
-            chain_funcs: list[tuple[RemoverMethod, Any, Any]] = []
-            for m in action.chain:
-                fn = method_map.get(m)
-                if fn:
-                    chain_funcs.append((m, fn, action.params))
+            if not action or action.action == "SKIP" or not action.chain:
+                if not (page_plan and page_plan.tasks):
+                    pr = PageReport(
+                        p=p_num,
+                        st=PageState.UNTOUCHED,
+                        ms=int((time.monotonic() - t0) * 1000),
+                    )
+                    page_reports.append(pr)
+                    if self.resume:
+                        saved_state[str(p_num)] = pr.model_dump()
+                    continue
+
+            chain_funcs = []
+            default_params = action.params if action else RemoverParams()
+
+            if page_plan and page_plan.tasks:
+                for t in page_plan.tasks:
+                    fn = method_map.get(t.method)
+                    if fn:
+                        p = t.params or default_params
+                        chain_funcs.append((t.method, fn, p, t.roi_bbox))
+            elif action and action.chain:
+                for m in action.chain:
+                    fn = method_map.get(m)
+                    if fn:
+                        chain_funcs.append((m, fn, default_params, None))
 
             if not chain_funcs:
                 pr = PageReport(
@@ -242,12 +318,23 @@ class Orchestrator:
                 page_reports.append(pr)
                 continue
 
+            tmpl = None
+            if hasattr(self, "reservoir") and self.reservoir:
+                p_obj = pdf.pages[i]
+                mb = [float(x) for x in p_obj.mediabox]
+                w_pt = mb[2] - mb[0]
+                h_pt = mb[3] - mb[1]
+                tw = int(w_pt * 150.0 / 72.0)
+                th = int(h_pt * 150.0 / 72.0)
+                tmpl = self.reservoir.get_template(tw, th)
+
             state, applied, v_result = engine.apply_with_rollback(
                 pdf=pdf,
                 page_idx=i,
                 page_kind=record.kind,
                 remover_funcs=chain_funcs,
-                known_wm_texts=action.params.target_texts,
+                known_wm_texts=action.params.target_texts if (action and action.params) else None,
+                template=tmpl,
             )
 
             pr = PageReport(

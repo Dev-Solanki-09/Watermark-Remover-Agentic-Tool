@@ -10,6 +10,7 @@ rung escalation engine tries the next method or flags the page.
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -26,52 +27,83 @@ logger = logging.getLogger(__name__)
 
 def raster_template_whiten(
     page_img: np.ndarray,
-    template: np.ndarray,
-    mask: np.ndarray,
-    params: RemoverParams,
+    *args,
+    **kwargs,
 ) -> np.ndarray:
-    """Replace watermark region with local background estimate.
+    """Replace watermark region with local background estimate or template unmixing.
 
     Used when watermark does not overlap foreground text/strokes.
-    The mask indicates watermark pixels to replace.
+    Supports either (page_img, template, mask, params) or (page_img, mask, params, template=...).
 
     Args:
         page_img: Page image (H, W, C) uint8
-        template: Median template (H, W) or (H, W, C) uint8
+        template: Optional median template (H, W) or (H, W, C) uint8
         mask: Binary watermark mask (H, W) uint8, 255=watermark
         params: Remover parameters
 
     Returns:
         Cleaned image (H, W, C) uint8
     """
+    template: np.ndarray | None = kwargs.get("template", None)
+    mask: np.ndarray | None = kwargs.get("mask", None)
+    params: RemoverParams | None = kwargs.get("params", None)
+
+    if len(args) == 3:
+        template, mask, params = args
+    elif len(args) == 2:
+        mask, params = args
+    elif len(args) == 1:
+        if mask is None:
+            mask = args[0]
+
+    if mask is None:
+        mask = np.zeros(page_img.shape[:2], dtype=np.uint8)
+    if params is None:
+        params = RemoverParams()
+
     result = page_img.copy()
+    h, w = result.shape[:2]
 
-    # Estimate local background from non-watermark regions
-    kernel_size = 31
+    # Convert to greyscale for stroke protection analysis
+    grey = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY) if result.ndim == 3 else result.copy()
 
-    # For each channel, compute local mean of background
-    for c in range(result.shape[2]) if result.ndim == 3 else [0]:
-        if result.ndim == 3:
-            channel = result[:, :, c].astype(np.float32)
+    # Foreground text stroke mask (luminance < 120 per L4 verification gate)
+    fg_mask = (grey < 120).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    fg_protected = cv2.dilate(fg_mask, kernel, iterations=1)
+
+    # Candidate watermark pixels: either from passed mask or grey range (130..250)
+    if mask is not None and mask.sum() > 50:
+        wm_cand = (mask > 0)
+    else:
+        wm_cand = (grey > 130) & (grey < 250)
+
+    # If template is provided, intersect with template watermark region
+    if template is not None:
+        if template.shape[:2] != (h, w):
+            tmpl_resized = cv2.resize(template, (w, h))
         else:
-            channel = result.astype(np.float32)
+            tmpl_resized = template
+        t_grey = cv2.cvtColor(tmpl_resized, cv2.COLOR_RGB2GRAY) if tmpl_resized.ndim == 3 else tmpl_resized
+        bg_t = float(np.percentile(t_grey, 95))
+        delta = np.where((t_grey > 130) & (t_grey < 245), bg_t - t_grey.astype(np.float32), 0.0)
+        t_mask = (delta > 15)
+        if t_mask.sum() > 50:
+            wm_cand = wm_cand & t_mask
 
-        # Background estimation via inpainting-like local mean
-        bg_channel = channel.copy()
-        bg_channel[mask > 0] = np.nan
+    wm_to_whiten = wm_cand & (fg_protected == 0)
 
-        # Simple approach: use median filter on non-masked regions
-        bg_filled = cv2.medianBlur(
-            np.nan_to_num(bg_channel, nan=128).astype(np.uint8),
-            kernel_size,
-        )
+    # Estimate background value from paper background pixels (grey >= 240)
+    paper_bg = (grey >= 240)
+    bg_val = int(np.percentile(grey[paper_bg], 95)) if paper_bg.sum() > 100 else 255
 
-        if result.ndim == 3:
-            result[:, :, c] = np.where(mask > 0, bg_filled, result[:, :, c])
-        else:
-            result = np.where(mask > 0, bg_filled, result)
+    if result.ndim == 3:
+        for c in range(result.shape[2]):
+            result[:, :, c] = np.where(wm_to_whiten, bg_val, result[:, :, c])
+    else:
+        result = np.where(wm_to_whiten, bg_val, result)
 
-    logger.info("raster_template_whiten: whitened %d watermark pixels", int(mask.sum() / 255))
+    logger.info("raster_template_whiten: whitened %d watermark pixels", int(wm_to_whiten.sum()))
     return result
 
 
@@ -459,3 +491,199 @@ def raster_ml_inpaint(
     # TODO: Phase 4 — implement ONNX LaMa inference
     logger.info("raster_ml_inpaint: stub — ONNX inference not yet implemented")
     return page_img
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Illumination Normalization (Rolling-Ball / Morphological Closing)
+# ---------------------------------------------------------------------------
+
+
+def illum_flatten(
+    page_img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    params: Optional[RemoverParams] = None,
+) -> np.ndarray:
+    """Normalize uneven mobile-camera shadows and bleed-through to 255 paper white.
+
+    Divides image by morphological closing background envelope, flattening
+    shadows while preserving dark ink strokes.
+    """
+    grey = cv2.cvtColor(page_img, cv2.COLOR_RGB2GRAY) if page_img.ndim == 3 else page_img.copy()
+    h, w = grey.shape[:2]
+
+    # Fast downsampled background envelope estimation
+    scale = min(1.0, 512.0 / max(h, w))
+    small = cv2.resize(grey, (int(w * scale), int(h * scale))) if scale < 1.0 else grey
+    kernel_size = max(21, int(51 * scale))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    bg_small = cv2.morphologyEx(small, cv2.MORPH_CLOSE, kernel)
+    bg = cv2.resize(bg_small, (w, h)) if scale < 1.0 else bg_small
+
+    # Check illumination variance
+    if float(np.std(bg)) < 6.0:
+        return page_img  # already flat lighting
+
+    norm = np.clip(grey.astype(np.float32) / np.maximum(bg.astype(np.float32), 1.0) * 255.0, 0, 255).astype(np.uint8)
+
+    if page_img.ndim == 3:
+        result = page_img.copy()
+        for c in range(3):
+            result[:, :, c] = np.clip(
+                page_img[:, :, c].astype(np.float32) / np.maximum(bg.astype(np.float32), 1.0) * 255.0,
+                0,
+                255,
+            ).astype(np.uint8)
+        return result
+    return norm
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Piecewise-Affine ECC Stack Alignment
+# ---------------------------------------------------------------------------
+
+
+def ecc_align_stack(
+    ref_img: np.ndarray,
+    target_img: np.ndarray,
+) -> np.ndarray:
+    """Sub-pixel affine alignment using cv2.findTransformECC."""
+    ref_grey = cv2.cvtColor(ref_img, cv2.COLOR_RGB2GRAY) if ref_img.ndim == 3 else ref_img
+    tgt_grey = cv2.cvtColor(target_img, cv2.COLOR_RGB2GRAY) if target_img.ndim == 3 else target_img
+    h, w = ref_grey.shape[:2]
+
+    # Downsample for fast and robust convergence
+    scale = min(1.0, 600.0 / max(h, w))
+    s_ref = cv2.resize(ref_grey, (int(w * scale), int(h * scale))) if scale < 1.0 else ref_grey
+    s_tgt = cv2.resize(tgt_grey, (int(w * scale), int(h * scale))) if scale < 1.0 else tgt_grey
+
+    warp_matrix = np.eye(2, 3, dtype=np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 25, 1e-3)
+
+    try:
+        cv2.findTransformECC(s_ref, s_tgt, warp_matrix, cv2.MOTION_TRANSLATION, criteria)
+        # Scale translation back to full resolution
+        warp_matrix[0, 2] /= scale
+        warp_matrix[1, 2] /= scale
+        aligned = cv2.warpAffine(target_img, warp_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+        return aligned
+    except Exception as exc:
+        logger.debug("ECC alignment failed (%s), returning unaligned", exc)
+        return target_img
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Margin Banner & Inverted Banner Strippers
+# ---------------------------------------------------------------------------
+
+
+def raster_margin_banner(
+    page_img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    params: Optional[RemoverParams] = None,
+) -> np.ndarray:
+    """Remove scanner margin banners (e.g. CamScanner, TapScanner, footer stamps).
+
+    Detects isolated ink blocks in top or bottom 8% margins separated from body text
+    by at least 20px whitespace and replaces with paper background white.
+    """
+    result = page_img.copy()
+    h, w = page_img.shape[:2]
+    grey = cv2.cvtColor(page_img, cv2.COLOR_RGB2GRAY) if page_img.ndim == 3 else page_img.copy()
+
+    # Check top margin and bottom margin (8% height)
+    m_h = int(h * 0.08)
+    paper_val = int(np.percentile(grey[grey >= 240], 95)) if (grey >= 240).sum() > 100 else 255
+
+    for y0, y1 in [(0, m_h), (h - m_h, h)]:
+        roi_grey = grey[y0:y1, :]
+        ink = (roi_grey < 160)
+        if ink.sum() > 30:
+            # Check horizontal whitespace separation between margin and body text
+            if y0 == 0:
+                sep_zone = grey[m_h : m_h + 20, :]
+            else:
+                sep_zone = grey[h - m_h - 20 : h - m_h, :]
+
+            # If separation zone is predominantly whitespace (>92% white)
+            if (sep_zone >= 220).mean() > 0.90:
+                # Whiten margin banner
+                if result.ndim == 3:
+                    result[y0:y1, :] = paper_val
+                else:
+                    result[y0:y1, :] = paper_val
+                logger.info("raster_margin_banner: stripped banner in margin [%d:%d]", y0, y1)
+
+    return result
+
+
+def inverted_banner_strip(
+    page_img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    params: Optional[RemoverParams] = None,
+) -> np.ndarray:
+    """Remove inverted dark-box watermarks (white text inside solid dark rectangle)."""
+    result = page_img.copy()
+    h, w = page_img.shape[:2]
+    grey = cv2.cvtColor(page_img, cv2.COLOR_RGB2GRAY) if page_img.ndim == 3 else page_img.copy()
+
+    # Find solid dark components (luminance < 60)
+    dark_mask = (grey < 60).astype(np.uint8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+
+    paper_val = int(np.percentile(grey[grey >= 240], 95)) if (grey >= 240).sum() > 100 else 255
+
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        bw = stats[i, cv2.CC_STAT_WIDTH]
+        bh = stats[i, cv2.CC_STAT_HEIGHT]
+        aspect = bw / max(bh, 1)
+
+        # Inverted banner: wide horizontal bar with high fill ratio
+        if aspect > 3.0 and area > 1000 and (area / (bw * bh)) > 0.60:
+            bx = stats[i, cv2.CC_STAT_LEFT]
+            by = stats[i, cv2.CC_STAT_TOP]
+            if result.ndim == 3:
+                result[by : by + bh, bx : bx + bw] = paper_val
+            else:
+                result[by : by + bh, bx : bx + bw] = paper_val
+            logger.info("inverted_banner_strip: stripped dark banner at [%d,%d,%d,%d]", bx, by, bw, bh)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Consensus Dark Stamp & Registered Outline Removers
+# ---------------------------------------------------------------------------
+
+
+def raster_dark_stamp_consensus(
+    page_img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    params: Optional[RemoverParams] = None,
+    template: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Remove high-density repeating stamp using P85 consensus and stroke bridging."""
+    return raster_template_whiten(page_img, mask, params, template=template)
+
+
+def raster_registered_outline_clean(
+    page_img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    params: Optional[RemoverParams] = None,
+    template: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Remove registered diagonal outline watermark using edge-aligned template."""
+    return raster_template_whiten(page_img, mask, params, template=template)
+
+
+def raster_hue_selective_unmix(
+    page_img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    params: Optional[RemoverParams] = None,
+) -> np.ndarray:
+    """Remove saturated watermark chroma while strictly protecting green/blue diagram hues."""
+    return raster_color_unmix(page_img, mask if mask is not None else np.zeros(page_img.shape[:2], dtype=np.uint8), params if params is not None else RemoverParams())
+

@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from wmclean.schemas import FailureCode, VerifyResult
+from wmclean.verify.text_protect import compute_fg_protection_mask
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +84,17 @@ def verify_raster(
         wm_mask = abs_diff > 8
         if template is not None:
             t_grey = _to_grey(template)
+            if t_grey.shape != orig_grey.shape:
+                t_grey = cv2.resize(t_grey, (orig_grey.shape[1], orig_grey.shape[0]))
             bg_t = float(np.percentile(t_grey, 95))
             wm_mask = wm_mask | (np.abs(bg_t - t_grey.astype(np.float32)) > 15)
 
     outside_mask = ~wm_mask if wm_mask is not None else np.ones_like(orig_grey, dtype=bool)
 
     # 2. Foreground Content Loss (L_fg)
-    # Identify foreground strokes (dark text and line drawings: luminance < 120)
-    orig_fg = orig_grey < 120
+    # Identify foreground strokes with C++ SIMD ISauvola binarization
+    fg_mask = compute_fg_protection_mask(orig_grey)
+    orig_fg = fg_mask > 0
     total_eval_fg = int(np.sum(orig_fg))
 
     content_loss = 0.0

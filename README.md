@@ -88,7 +88,7 @@ wmclean run document.pdf -o cleaned.pdf --report report.json
 
 Stdout output (capped at ≤300 tokens):
 ```
-WMCLEAN v1.0.0 | document.pdf -> cleaned.pdf | status=OK (exit 0)
+WMCLEAN v0.0.2-alpha | document.pdf -> cleaned.pdf | status=OK (exit 0)
 pages=12 | CLEAN_EXACT=10 | CLEAN_VERIFIED=2 | UNTOUCHED=0 | FLAGGED=0
 size_in=1.4MB | size_out=1.2MB (0.86x) | time=2.1s | ram_peak=142MB | llm_calls=0
 report=report.json
@@ -228,7 +228,6 @@ make smoke
 - **[LJSthu/Python-Remove-Watermark](https://github.com/LJSthu/Python-Remove-Watermark)**: Pioneered adaptive $\Delta E$ color thresholding and background luminance whitening for scanned PDF watermarks.
 - **[watermark-remover-cli](https://pypi.org/project/watermark-remover-cli)**: Demonstrated HSV chroma and saturation separation for isolating colored overlays over dark text.
 - **Foundational Engines**: Built upon the PDF primitives of [pikepdf](https://github.com/pikepdf/pikepdf) (QPDF core) and [PyMuPDF](https://github.com/pymupdf/PyMuPDF) (MuPDF core), alongside [OpenCV](https://opencv.org/) and [NumPy](https://numpy.org/).
-- **Repository Standards**: Governance and verification methodology adapted from [repo-audit](https://github.com/conorbronsdon/repo-audit) by Conor Bronsdon and [readme-audit](https://github.com/nnennandukwe/skills/tree/main/skills/readme-audit) by Nnenna Ndukwe.
 
 ---
 

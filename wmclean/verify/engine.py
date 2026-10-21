@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
+import numpy as np
 import pikepdf
 
 from wmclean.schemas import (
@@ -49,9 +50,11 @@ class VerificationEngine:
         pdf: pikepdf.Pdf,
         page_idx: int,
         page_kind: PageKind,
-        remover_funcs: list[tuple[RemoverMethod, Callable, RemoverParams]],
+        remover_funcs: list[tuple[RemoverMethod, Callable, RemoverParams] | tuple[RemoverMethod, Callable, RemoverParams, Optional[tuple[int, int, int, int]]]],
         mask_bbox: Optional[list[float]] = None,
         known_wm_texts: Optional[list[str]] = None,
+        template: Optional[np.ndarray] = None,
+        roi_bbox: Optional[tuple[int, int, int, int]] = None,
     ) -> tuple[PageState, list[str], VerifyResult]:
         """Apply a sequence of candidate removers with verification gates and rollback.
 
@@ -75,16 +78,33 @@ class VerificationEngine:
         methods_applied = []
         last_result = VerifyResult(passed=False, reason="No removers executed")
 
-        for method, func, params in remover_funcs:
+        for item in remover_funcs:
+            if len(item) == 4:
+                method, func, params, item_roi = item  # type: ignore[misc]
+            else:
+                method, func, params = item  # type: ignore[misc]
+                item_roi = roi_bbox
+
             logger.debug("Testing remover %s on page %d", method.value, page_idx + 1)
             try:
-                if method.value.startswith("raster_"):
+                is_raster = (
+                    method.value.startswith("raster_")
+                    or method in {
+                        RemoverMethod.INVERTED_BANNER_STRIP,
+                        RemoverMethod.PIRACY_OCR_SPOTTER,
+                        RemoverMethod.ILLUM_FLATTEN,
+                        RemoverMethod.SWT_MORPH_RECONSTRUCT,
+                        RemoverMethod.BEER_LAMBERT_STAIN_UNMIX,
+                    }
+                )
+                if is_raster:
                     # Raster remover execution
                     import cv2
                     import numpy as np
                     import pymupdf
 
                     from wmclean.assemble.encoder import update_page_image
+                    from wmclean.intelligence.roi_lock import apply_in_roi, clamp_roi_bbox
 
                     # Render baseline page at 150 DPI
                     with pymupdf.open(stream=orig_buf.getvalue(), filetype="pdf") as doc:
@@ -98,25 +118,83 @@ class VerificationEngine:
                     # Compute mask depending on remover
                     h, w = orig_arr.shape[:2]
                     grey = cv2.cvtColor(orig_arr, cv2.COLOR_RGB2GRAY)
-                    if method == RemoverMethod.RASTER_COLOR_UNMIX:
+                    if method in (
+                        RemoverMethod.RASTER_COLOR_UNMIX,
+                        RemoverMethod.RASTER_HUE_SELECTIVE_UNMIX,
+                        RemoverMethod.BEER_LAMBERT_STAIN_UNMIX,
+                    ):
                         hsv = cv2.cvtColor(orig_arr, cv2.COLOR_RGB2HSV)
-                        mask = (hsv[:, :, 1] > 30).astype(np.uint8) * 255
+                        mask = (hsv[:, :, 1] > 25).astype(np.uint8) * 255
                     elif method == RemoverMethod.RASTER_BITONAL_DESPECKLE:
                         mask = np.ones_like(grey, dtype=np.uint8) * 255
                     elif method == RemoverMethod.RASTER_FFT_NOTCH:
                         mask = np.ones_like(grey, dtype=np.uint8) * 255
                     else:
-                        mask = ((grey > 160) & (grey < 248)).astype(np.uint8) * 255
+                        mask = ((grey > 130) & (grey < 250)).astype(np.uint8) * 255
 
-                    if method == RemoverMethod.RASTER_ALPHA_INV:
-                        tmpl = np.full_like(grey, 190)
-                        cleaned_arr = func(orig_arr, tmpl, mask, params)
-                    elif method == RemoverMethod.RASTER_BITONAL_DESPECKLE:
-                        cleaned_arr = func(grey, mask, params)
+                    if method in (
+                        RemoverMethod.RASTER_TEMPLATE_WHITEN,
+                        RemoverMethod.RASTER_DARK_STAMP_CONSENSUS,
+                        RemoverMethod.RASTER_REGISTERED_OUTLINE_CLEAN,
+                    ):
+                        fg_m = (grey < 120).astype(np.uint8) * 255
+                        fg_p = cv2.dilate(fg_m, cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)), iterations=1)
+                        if template is not None:
+                            t_grey = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY) if template.ndim == 3 else template
+                            if t_grey.shape != grey.shape:
+                                t_grey = cv2.resize(t_grey, (grey.shape[1], grey.shape[0]))
+                            bg_t = float(np.percentile(t_grey, 95))
+                            delta_t = np.where((t_grey > 130) & (t_grey < 245), bg_t - t_grey.astype(np.float32), 0.0)
+                            t_mask = (delta_t > 15) & (fg_p == 0)
+                            if t_mask.sum() > 50:
+                                eval_mask = t_mask.astype(np.uint8) * 255
+                            else:
+                                eval_mask = (((grey > 130) & (grey < 250)) & (fg_p == 0)).astype(np.uint8) * 255
+                        else:
+                            eval_mask = (((grey > 130) & (grey < 250)) & (fg_p == 0)).astype(np.uint8) * 255
                     else:
-                        cleaned_arr = func(orig_arr, mask, params)
+                        eval_mask = mask
 
-                    v_result = verify_raster(orig_arr, cleaned_arr, wm_mask=(mask > 0))
+                    def _run_single_remover(crop_img, crop_mask=None, crop_tmpl=None):
+                        c_grey = cv2.cvtColor(crop_img, cv2.COLOR_RGB2GRAY) if crop_img.ndim == 3 else crop_img
+                        m = crop_mask if crop_mask is not None else ((c_grey > 130) & (c_grey < 250)).astype(np.uint8) * 255
+                        if method == RemoverMethod.RASTER_ALPHA_INV:
+                            tmpl_use = crop_tmpl if crop_tmpl is not None else np.full_like(c_grey, 190)
+                            return func(crop_img, tmpl_use, m, params)
+                        elif method in (
+                            RemoverMethod.RASTER_TEMPLATE_WHITEN,
+                            RemoverMethod.RASTER_DARK_STAMP_CONSENSUS,
+                            RemoverMethod.RASTER_REGISTERED_OUTLINE_CLEAN,
+                        ):
+                            return func(crop_img, m, params, template=crop_tmpl)
+                        elif method == RemoverMethod.RASTER_BITONAL_DESPECKLE:
+                            return func(c_grey, m, params)
+                        elif method == RemoverMethod.BEER_LAMBERT_STAIN_UNMIX:
+                            return func(crop_img, mask=m)
+                        else:
+                            return func(crop_img, m, params)
+
+                    if item_roi is not None:
+                        rx1, ry1, rx2, ry2 = clamp_roi_bbox(item_roi, w, h, pad=6)
+                        sub_mask = mask[ry1:ry2, rx1:rx2] if mask is not None else None
+                        sub_tmpl = None
+                        if template is not None:
+                            t_h, t_w = template.shape[:2]
+                            t_res = cv2.resize(template, (w, h)) if (t_h, t_w) != (h, w) else template
+                            sub_tmpl = t_res[ry1:ry2, rx1:rx2]
+
+                        cleaned_arr = apply_in_roi(
+                            orig_arr,
+                            item_roi,
+                            lambda c: _run_single_remover(c, crop_mask=sub_mask, crop_tmpl=sub_tmpl),
+                        )
+                    else:
+                        cleaned_arr = _run_single_remover(orig_arr, crop_mask=mask, crop_tmpl=template)
+
+                    c_diff = cv2.absdiff(grey, cv2.cvtColor(cleaned_arr, cv2.COLOR_RGB2GRAY) if cleaned_arr.ndim == 3 else cleaned_arr) > 8
+                    wm_mask_eval = (eval_mask > 0) | c_diff
+
+                    v_result = verify_raster(orig_arr, cleaned_arr, wm_mask=wm_mask_eval, template=template)
                     if v_result.passed:
                         # Find Image XObject name on this page
                         res = page.get("/Resources")

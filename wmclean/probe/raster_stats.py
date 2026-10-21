@@ -19,7 +19,7 @@ from wmclean.schemas import PageKind, ProbeRecord, RasterStats
 _RESERVOIR_K = 31
 
 # Probe rasterization DPI
-_PROBE_DPI = 100
+_PROBE_DPI = 150
 
 
 class ReservoirBucket:
@@ -96,6 +96,8 @@ class RasterReservoir:
         key = self._bucket_key(width, height)
         bucket = self.buckets.get(key)
         if bucket is None:
+            if len(self.buckets) == 1:
+                return next(iter(self.buckets.values())).compute_median_template()
             return None
         return bucket.compute_median_template()
 

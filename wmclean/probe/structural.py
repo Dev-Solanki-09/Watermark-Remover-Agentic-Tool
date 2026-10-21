@@ -244,11 +244,85 @@ def _extract_text_candidates(
 ) -> list[TextCandidate]:
     """Extract text spans that match watermark patterns.
 
-    Uses PyMuPDF text dictionary inspection for fast, precise span
-    extraction (bbox, font, size, rotation, color, normalized string).
+    Uses PyMuPDF low-level character/stroke trace inspection (page.get_texttrace())
+    for 1ms exact vector/text watermark probing (adapted from jonatw/pdf-watermark-remove).
+    Falls back to text dictionary if get_texttrace is unavailable.
     """
-    results = []
+    results: list[TextCandidate] = []
     if fitz_page is not None:
+        # Fast-path: PyMuPDF >= 1.28.2 page.get_texttrace() (1ms/page)
+        if hasattr(fitz_page, "get_texttrace"):
+            try:
+                traces = fitz_page.get_texttrace()
+                for trace in traces:
+                    t_type = trace.get("type", 0)
+                    # Protect invisible OCR layer (render mode 3) - never candidate for removal
+                    if t_type == 3:
+                        continue
+
+                    dx, dy = trace.get("dir", (1.0, 0.0))
+                    rot_rad = math.atan2(dy, dx)
+                    rot_deg = round(math.degrees(rot_rad), 1)
+                    is_diagonal = abs(rot_deg) > 5.0
+
+                    opacity = float(trace.get("opacity", 1.0))
+                    is_translucent = opacity < 0.85
+                    is_stroke_outline = (t_type == 1)
+
+                    font_size = float(trace.get("size", 0.0))
+                    font = str(trace.get("font", ""))
+
+                    color_raw = trace.get("color", (0.0, 0.0, 0.0))
+                    if isinstance(color_raw, (tuple, list)) and len(color_raw) >= 3:
+                        r, g, b = float(color_raw[0]), float(color_raw[1]), float(color_raw[2])
+                    elif isinstance(color_raw, int):
+                        r = ((color_raw >> 16) & 0xFF) / 255.0
+                        g = ((color_raw >> 8) & 0xFF) / 255.0
+                        b = (color_raw & 0xFF) / 255.0
+                    else:
+                        r, g, b = 0.0, 0.0, 0.0
+
+                    is_light = (r > 0.4 or g > 0.4 or b > 0.4)
+
+                    chars = trace.get("chars", [])
+                    raw_text = "".join(chr(c[0]) for c in chars if c[0] > 0).strip()
+                    norm = normalize_text(raw_text) if raw_text else "<EMPTY>"
+                    has_kw = bool(_WM_KEYWORDS.search(raw_text)) if raw_text else False
+
+                    # Watermark candidate grouping:
+                    # - Diagonal orientation
+                    # - Translucent opacity (ca < 0.85)
+                    # - Stroke-only outline (type == 1)
+                    # - Watermark keyword match with large/light/rotated text
+                    is_wm = (
+                        (is_diagonal and (has_kw or font_size >= 14.0 or is_translucent or is_stroke_outline))
+                        or (is_translucent and (has_kw or font_size >= 14.0 or is_stroke_outline))
+                        or (is_stroke_outline and (has_kw or font_size >= 14.0 or is_diagonal))
+                        or (has_kw and (font_size >= 20.0 or is_light or is_diagonal))
+                    )
+
+                    if is_wm:
+                        bb = [float(x) for x in trace.get("bbox", [0, 0, 0, 0])]
+                        sig = _text_sig(norm, font, font_size, rot_deg)
+                        results.append(
+                            TextCandidate(
+                                sig=sig,
+                                norm_str=norm,
+                                rot_deg=rot_deg,
+                                bb=bb,
+                                font=font,
+                                size=font_size,
+                                color=[round(r, 2), round(g, 2), round(b, 2)],
+                                tr=t_type,
+                                ca=opacity,
+                                doc_freq=1.0,
+                            )
+                        )
+                return results
+            except Exception:
+                pass
+
+        # Fallback: get_text("dict")
         try:
             text_dict = fitz_page.get_text("dict")
             for block in text_dict.get("blocks", []):

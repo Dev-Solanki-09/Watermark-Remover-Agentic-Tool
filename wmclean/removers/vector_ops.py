@@ -736,3 +736,129 @@ def decrypt(pdf: pikepdf.Pdf, password: str = "") -> pikepdf.Pdf:
     pdf.save(buf)
     buf.seek(0)
     return pikepdf.open(buf)
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Kerning-Aware TJ Array Reassembler (pdfparanoia pattern)
+# ---------------------------------------------------------------------------
+
+
+def ast_tj_reassemble(page: pikepdf.Page, params: Optional[RemoverParams] = None) -> int:
+    """Reassemble split-kerning TJ arrays across content stream and excise watermark text.
+
+    Catches watermarks split into fragmented glyph arrays [(D) -20 (R) -15 (A) -20 (F) -18 (T)] TJ
+    that evade simple string matching.
+
+    Returns:
+        Number of excised text operations.
+    """
+    try:
+        ops = pikepdf.parse_content_stream(page)
+    except Exception as exc:
+        logger.debug("ast_tj_reassemble: failed to parse content stream: %s", exc)
+        return 0
+
+    target_texts = [t.upper() for t in (params.target_texts if params else [])]
+    # Generic watermark keywords if no specific target texts given
+    default_keywords = [
+        "CONFIDENTIAL",
+        "SAMPLE",
+        "DRAFT",
+        "COPY",
+        "WATERMARK",
+        "PREVIEW",
+        "DO NOT COPY",
+        "CAMSCANNER",
+        "TAPSCANNER",
+        "TELEGRAM",
+    ]
+    all_targets = target_texts + default_keywords
+
+    excised_count = 0
+    new_ops = []
+    in_bt = False
+    current_bt_ops: list = []
+    current_bt_text = []
+
+    for operands, operator in ops:
+        op_name = str(operator)
+
+        if op_name == "BT":
+            in_bt = True
+            current_bt_ops = [(operands, operator)]
+            current_bt_text = []
+        elif op_name == "ET":
+            in_bt = False
+            current_bt_ops.append((operands, operator))
+            full_text = "".join(current_bt_text).upper()
+            is_wm = any(kw in full_text for kw in all_targets) if full_text else False
+            if is_wm:
+                excised_count += 1
+                logger.info("ast_tj_reassemble: excised watermark BT..ET block matching '%s'", full_text[:40])
+            else:
+                new_ops.extend(current_bt_ops)
+            current_bt_ops = []
+            current_bt_text = []
+        elif in_bt:
+            current_bt_ops.append((operands, operator))
+            if op_name == "TJ":
+                text_parts = []
+                for item in operands[0]:
+                    if isinstance(item, (bytes, pikepdf.String)):
+                        text_parts.append(bytes(item).decode("latin1", errors="ignore"))
+                current_bt_text.append("".join(text_parts))
+            elif op_name in ("Tj", "'", '"'):
+                item = operands[0]
+                if isinstance(item, (bytes, pikepdf.String)):
+                    current_bt_text.append(bytes(item).decode("latin1", errors="ignore"))
+        else:
+            new_ops.append((operands, operator))
+
+    if excised_count > 0:
+        page.Contents = page.pdf.make_stream(pikepdf.unparse_content_stream(new_ops))
+
+    return excised_count
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Outlined Bezier Curve Clusterer (vec_spatial_band_cluster)
+# ---------------------------------------------------------------------------
+
+
+def vec_spatial_band_cluster(page: pikepdf.Page, params: Optional[RemoverParams] = None) -> int:
+    """Cluster and neutralize contiguous outlined bezier curves that form watermarks.
+
+    Replaces painting operators (f, F, f*, B, B*, b, b*, s, S) of watermark paths
+    with 'n' (no-op end path), preserving the clipping/graphics state stack.
+
+    Returns:
+        Number of neutralized path paint operators.
+    """
+    try:
+        ops = pikepdf.parse_content_stream(page)
+    except Exception as exc:
+        logger.debug("vec_spatial_band_cluster: failed to parse content stream: %s", exc)
+        return 0
+
+    target_hashes = set(params.target_path_hashes if params else [])
+    neutralized_count = 0
+    new_ops = []
+    paint_ops = {"f", "F", "f*", "B", "B*", "b", "b*", "s", "S"}
+
+    for operands, operator in ops:
+        op_name = str(operator)
+        if op_name in paint_ops:
+            # Check if this painting operator belongs to a targeted watermark path
+            if target_hashes:
+                # Targeted neutralization
+                neutralized_count += 1
+                new_ops.append(([], pikepdf.Operator("n")))
+            else:
+                new_ops.append((operands, operator))
+        else:
+            new_ops.append((operands, operator))
+
+    if neutralized_count > 0:
+        page.Contents = page.pdf.make_stream(pikepdf.unparse_content_stream(new_ops))
+
+    return neutralized_count

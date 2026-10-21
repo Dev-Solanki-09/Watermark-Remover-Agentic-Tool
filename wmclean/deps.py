@@ -1,0 +1,119 @@
+"""Lazy-loading dependency wrappers for SOTA vision & OCR libraries.
+
+Ensures zero startup overhead (<100ms import time) and graceful degradation
+if optional packages are unavailable.
+"""
+
+from __future__ import annotations
+
+import importlib
+import logging
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+_RAPIDOCR_INSTANCE: Optional[Any] = None
+_RAPIDOCR_CHECKED: bool = False
+
+_PYMATTING_MODULE: Optional[Any] = None
+_PYMATTING_CHECKED: bool = False
+
+
+def has_cv2_contrib() -> bool:
+    """Check if opencv-contrib extra modules (e.g. ximgproc) are available."""
+    try:
+        import cv2
+        return hasattr(cv2, "ximgproc")
+    except Exception:
+        return False
+
+
+def has_scipy() -> bool:
+    """Check if SciPy is available."""
+    return importlib.util.find_spec("scipy") is not None
+
+
+def has_skimage() -> bool:
+    """Check if scikit-image is available."""
+    return importlib.util.find_spec("skimage") is not None
+
+
+def has_pymatting() -> bool:
+    """Check if pymatting is available."""
+    return importlib.util.find_spec("pymatting") is not None
+
+
+def get_pymatting() -> Optional[Any]:
+    """Lazy-load and return pymatting module if installed."""
+    global _PYMATTING_MODULE, _PYMATTING_CHECKED
+    if _PYMATTING_CHECKED:
+        return _PYMATTING_MODULE
+
+    _PYMATTING_CHECKED = True
+    try:
+        import pymatting
+        _PYMATTING_MODULE = pymatting
+        logger.debug("pymatting loaded successfully")
+    except Exception as exc:
+        logger.debug("pymatting not available: %s", exc)
+        _PYMATTING_MODULE = None
+
+    return _PYMATTING_MODULE
+
+
+def has_rapidocr() -> bool:
+    """Check if rapidocr-onnxruntime or rapidocr is available."""
+    return (
+        importlib.util.find_spec("rapidocr_onnxruntime") is not None
+        or importlib.util.find_spec("rapidocr") is not None
+    )
+
+
+def get_rapidocr() -> Optional[Any]:
+    """Lazy-load and return RapidOCR singleton engine if installed."""
+    global _RAPIDOCR_INSTANCE, _RAPIDOCR_CHECKED
+    if _RAPIDOCR_CHECKED:
+        return _RAPIDOCR_INSTANCE
+
+    _RAPIDOCR_CHECKED = True
+    try:
+        if importlib.util.find_spec("rapidocr_onnxruntime") is not None:
+            from rapidocr_onnxruntime import RapidOCR
+            _RAPIDOCR_INSTANCE = RapidOCR()
+            logger.debug("RapidOCR (rapidocr_onnxruntime) initialized")
+        elif importlib.util.find_spec("rapidocr") is not None:
+            from rapidocr import RapidOCR
+            _RAPIDOCR_INSTANCE = RapidOCR()
+            logger.debug("RapidOCR initialized")
+    except Exception as exc:
+        logger.debug("RapidOCR initialization failed: %s", exc)
+        _RAPIDOCR_INSTANCE = None
+
+    return _RAPIDOCR_INSTANCE
+
+
+_DOXAPY_MODULE: Optional[Any] = None
+_DOXAPY_CHECKED: bool = False
+
+
+def has_doxapy() -> bool:
+    """Check if doxapy C++ SIMD binarization library is available."""
+    return importlib.util.find_spec("doxapy") is not None
+
+
+def get_doxapy() -> Optional[Any]:
+    """Lazy-load and return doxapy module if installed."""
+    global _DOXAPY_MODULE, _DOXAPY_CHECKED
+    if _DOXAPY_CHECKED:
+        return _DOXAPY_MODULE
+
+    _DOXAPY_CHECKED = True
+    try:
+        import doxapy
+        _DOXAPY_MODULE = doxapy
+        logger.debug("doxapy loaded successfully")
+    except Exception as exc:
+        logger.debug("doxapy not available: %s", exc)
+        _DOXAPY_MODULE = None
+
+    return _DOXAPY_MODULE

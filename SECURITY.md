@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
-| < 1.0   | :x:                |
+| 0.0.x (alpha) | :white_check_mark: |
+| < 0.0.2 | :x:                |
 
 ---
 
@@ -15,10 +15,10 @@ We take the security of PDF parsing and processing very seriously. PDFs are comp
 
 If you discover a security vulnerability (such as a memory leak, parser crash, arbitrary file read/write, or denial-of-service vulnerability), please **do not** open a public issue. Instead, report it privately:
 
-- **Email**: Send vulnerability reports with proof-of-concept files to `security@wmclean.org` (or contact maintainers via GitHub Private Vulnerability Reporting).
+- **GitHub Advisory**: Open a confidential security advisory at [GitHub Security Advisories](https://github.com/Dev-Solanki-09/watermark-remover-auto-agent-tool/security/advisories/new).
 - **Details to Include**:
-  - Sample PDF demonstrating the issue (minimized if possible).
-  - Environment details: OS, Python version, `pikepdf` and `PyMuPDF` versions.
+  - Sample PDF demonstrating the issue (minimized if possible, redacting any sensitive data).
+  - Environment details: OS, Python version, `pikepdf`, `PyMuPDF`, and `OpenCV` versions.
   - Expected vs. actual behavior (e.g. unexpected memory spike or process crash).
 
 We will acknowledge receipt within 48 hours and coordinate a fix and patch release before public disclosure.
@@ -46,3 +46,6 @@ We will acknowledge receipt within 48 hours and coordinate a fix and patch relea
 
 4. **Zero Code Execution**:
    - PDF JavaScript (`/JS`), Launch actions (`/Launch`), and executable attachments are neither executed nor rendered.
+
+5. **Document Sanitization & Secret Isolation**:
+   - Repository-level `.gitignore` rules prevent accidental commits of personal PDFs, client files, diagnostic artifacts, and API credentials.

@@ -1,13 +1,14 @@
 # watermark-remover-auto-agent-tool (`wmclean`)
 
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)]()
+[![CI](https://github.com/Dev-Solanki-09/watermark-remover-auto-agent-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Dev-Solanki-09/watermark-remover-auto-agent-tool/actions)
+[![Version](https://img.shields.io/badge/version-0.0.2--alpha-blue.svg)](https://github.com/Dev-Solanki-09/watermark-remover-auto-agent-tool/releases/tag/v0.0.2-alpha)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CPU-Only](https://img.shields.io/badge/hardware-CPU--only-success.svg)]()
 [![RAM Cap](https://img.shields.io/badge/RAM%20Cap-2.0%20GB-orange.svg)]()
 [![Agent Ready](https://img.shields.io/badge/Agent%20Ready-AGENTS.md-blueviolet.svg)](AGENTS.md)
 
-**watermark-remover-auto-agent-tool** (`wmclean`) removes textual, vector, and raster watermarks from PDF documents using deterministic content-stream filtering, color unmixing, and mathematical verification gates.
+**watermark-remover-auto-agent-tool** (`wmclean`) is a deterministic, high-throughput PDF forensic engine and watermark eradication CLI. It removes textual, vector, and raster watermarks using PDF content-stream AST manipulation, optical density separation, closed-form alpha matting, and mathematical verification gates.
 
 It inspects input PDFs page-by-page, classifies watermark carriers (annotations, optional content groups, content stream text operators, XObjects, or raster background stamps), strips or unmixes them, verifies that body text and diagrams remain 100% intact ($\Delta_{\text{text}} = 0$), and writes a cleaned output PDF alongside a machine-readable JSON execution report.
 
@@ -15,11 +16,17 @@ It inspects input PDFs page-by-page, classifies watermark carriers (annotations,
 
 ## Key Features
 
-- **Zero False Positives on Text**: Strict L4 verification gates guarantee zero body text loss ($\Delta_{\text{text}} = 0$) and zero non-watermark vector operator mutation ($\Delta_{\bar{M}} = 0$). If a page cannot be verified clean, it is safely marked `FLAGGED` or left `UNTOUCHED`.
+- **Zero False Positives on Text ($\Delta_{\text{text}} = 0$)**: Strict L4 verification gates and glyph bounding-box protection ensure that body text, punctuation, diacritics, and mathematical formulas are never clipped, blurred, or lost. Any unresolvable conflict triggers an immediate rollback to `FLAGGED` or `UNTOUCHED`.
+- **L0.5 Surgical Gatekeeper & ROI-Lock**: Fast pre-flight visual and structural heuristics immediately bypass untouched pages (`UNTOUCHED`), ensuring **0 LLM tokens** and **0 ms** wasted on clean content. Watermarks are isolated to sub-pixel coordinates; pixels and vector streams outside the ROI mask are mathematically locked and preserved.
+- **Stage A AST Split-Kerning Reassembly**: Structural parsing on PDF content streams detects and reassembles obfuscated text arrays (`[(W) -15 (A) -15 (T)...]`), eliminating adversarial split-glyph watermarks without regex distortion.
+- **SOTA Optical Density & Signal Processing**:
+  - **Closed-Form Alpha Matting**: Solves Laplacian-guided alpha mattes to restore text beneath continuous, low-opacity diagonal stamps over complex or textured backgrounds.
+  - **Stain Deconvolution**: Orthogonal color-matrix separation isolating colored reviewer stamps from monochrome underlying text.
+  - **Sub-Pixel Chamfer Alignment**: Cross-page template correlation for repeated publisher stamps and watermark patches.
+  - **Piracy & Ad OCR Spotter**: Targeted regex and heuristic scanning for Telegram stamps, URL watermarks, and mobile scanner branding.
 - **CPU-Only & Memory Bounded**: Operates strictly on CPU using SIMD-accelerated NumPy and OpenCV with a hard **2.0 GB RAM cap**. Zero GPU or cloud runtime required.
 - **Atomic & In-Place Safe**: Output PDFs and reports are written to temporary swap files (`<target>.tmp.<pid>`) and committed via atomic filesystem replacement (`os.replace`). In-place cleaning (`input.pdf -> input.pdf`) is safely supported.
 - **LLM Agent Fast-Path**: Includes an [AGENTS.md](AGENTS.md) contract (<350 tokens) and programmatic stdout caps (≤300 tokens) allowing autonomous coding agents to orchestrate or modify watermark removal jobs with zero token bleed.
-- **Deterministic 7-Layer Pipeline**: Decouples structural probing, carrier signature clustering, rule-based routing, vector/raster removers, mathematical verification, and stream re-encoding.
 
 ---
 
@@ -28,13 +35,16 @@ It inspects input PDFs page-by-page, classifies watermark carriers (annotations,
 ```mermaid
 flowchart TD
     IN[Input PDF] --> L0[L0 Probe: Structural & Raster Stats]
-    L0 --> L1[L1 Cluster: Canonical Hashing & SQLite Cache]
+    L0 --> L05{L0.5 Gatekeeper & ROI-Lock}
+    L05 -- Clean Page --> UNTOUCHED[Bypass: Mark UNTOUCHED & 0 Tokens]
+    L05 -- Watermarked --> L1[L1 Cluster: Canonical Hashing & SQLite Cache]
     L1 --> L2[L2 Router: Rule Matrix & Bounded Fallback]
-    L2 --> L3[L3 Removers: 10 Vector + 7 Raster Rungs]
-    L3 --> L4{L4 Verify: Δ_text=0 & Pixel Residuals}
+    L2 --> L3[L3 Removers: AST Vector + Alpha Matting + Stain Deconv]
+    L3 --> L4{L4 Verify: Δ_text=0 & Character BBox Shield}
     L4 -- Passed --> L5[L5 Assemble: Flate Recompression & Atomic Swap]
     L4 -- Failed --> ROLLBACK[In-Memory Rollback to Untouched]
     ROLLBACK --> L5
+    UNTOUCHED --> L5
     L5 --> OUT[Clean PDF + r.json Report]
 ```
 
@@ -46,20 +56,24 @@ flowchart TD
 - Python 3.11 or newer
 - Standard C runtime libraries (required by `pikepdf` and `OpenCV`)
 
-### Install from Source
+### Install with `uv` (Recommended)
 ```bash
-git clone https://github.com/your-username/watermark-remover-auto-agent-tool.git
+git clone https://github.com/Dev-Solanki-09/watermark-remover-auto-agent-tool.git
 cd watermark-remover-auto-agent-tool
-pip install -e .
+uv sync --all-extras
 ```
 
-### Optional ML Fallback & Dev Dependencies
+### Install with `pip`
+```bash
+git clone https://github.com/Dev-Solanki-09/watermark-remover-auto-agent-tool.git
+cd watermark-remover-auto-agent-tool
+pip install -e ".[dev]"
+```
+
+### Optional ML Fallback Dependencies
 ```bash
 # Install with optional ONNX runtime for localized crop inpainting:
 pip install -e ".[ml]"
-
-# Install with development & testing dependencies:
-pip install -e ".[dev]"
 ```
 
 ### Self-Diagnostics
@@ -100,10 +114,10 @@ Process an entire folder of PDFs with checkpointing and resume support:
 wmclean batch ./input_pdfs -o ./cleaned_pdfs --report batch_report.json --resume
 ```
 
-### 3. Dry-Run Inspection
-Probe PDF structure and display detected watermark clusters without modifying the file:
+### 3. Dry-Run Inspection & Planning
+Probe PDF structure and preview planned removal rungs without modifying files:
 ```bash
-wmclean inspect document.pdf
+wmclean plan document.pdf
 ```
 
 ### 4. Password-Protected Documents
@@ -201,7 +215,7 @@ Autonomous orchestrator agents should use [AGENTS.md](AGENTS.md) as a direct ope
 
 ---
 
-## Developer Tooling
+## Developer Tooling & Verification
 
 The root `Makefile` (and `make.bat` for Windows) provides token-efficient commands:
 
@@ -209,7 +223,7 @@ The root `Makefile` (and `make.bat` for Windows) provides token-efficient comman
 # Run Ruff linting and Mypy typechecking (0 tokens output on pass)
 make check-q
 
-# Run fast unit test suite (quiet, failures only)
+# Run fast unit test suite (60 tests, quiet, failures only)
 make test-q
 
 # Run healthcheck diagnostics and end-to-end smoke test
@@ -222,8 +236,10 @@ make smoke
 
 `watermark-remover-auto-agent-tool` synthesizes, unifies, and builds upon pioneering open-source PDF watermark removal techniques:
 
+- **[kanzure/pdfparanoia](https://github.com/kanzure/pdfparanoia)**: Pioneered split-kerning array (`TJ`) scrubbing and structural publisher watermark stripping using `pikepdf`.
 - **[chazeon/PDF-Watermark-Remover](https://github.com/chazeon/pdf-watermark-remover)**: Inspired our L3 vector object-tree traversal and indirect `/XObject` dictionary deletion patterns.
 - **[jamespan/pdf-unstamper](https://github.com/jamespan/pdf-unstamper)**: Pioneered keyword-based content-stream text operator matching across font encodings, informing our `text_op_strip` AST rewriter.
+- **[jonatw/pdf-watermark-remover](https://github.com/jonatw/pdf-watermark-remover)**: Demonstrated content-stream token filtering and structural PDF object unlinking.
 - **[Goshin/Remove-PDF-Watermark](https://github.com/Goshin/Remove-PDF-Watermark)**: Demonstrated template matching with normalized cross-correlation (`TM_CCOEFF_NORMED`) for raster watermark patch detection and erasure.
 - **[LJSthu/Python-Remove-Watermark](https://github.com/LJSthu/Python-Remove-Watermark)**: Pioneered adaptive $\Delta E$ color thresholding and background luminance whitening for scanned PDF watermarks.
 - **[watermark-remover-cli](https://pypi.org/project/watermark-remover-cli)**: Demonstrated HSV chroma and saturation separation for isolating colored overlays over dark text.
@@ -234,3 +250,4 @@ make smoke
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+

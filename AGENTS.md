@@ -26,10 +26,12 @@ If your task is to fix a bug or add a feature, DO NOT scan the whole repo. Jump 
 - L3 Vector AST Removers (pikepdf)          -> `wmclean/removers/vector_ops.py` & `stream_ast.py`
 - L3 Raster Removers (numpy/cv2)            -> `wmclean/removers/raster_ops.py` & `stitch.py`
 - L3 Alpha Matting & Piracy OCR Spotter     -> `wmclean/removers/matting.py` & `piracy_ocr.py`
-- L4 Exact & Raster Verification Metrics    -> `wmclean/verify/`
+- L3 Stain Deconv & Chamfer Align          -> `wmclean/removers/stain_deconv.py` & `chamfer_align.py`
+- L4 Verification & Character BBox Shield   -> `wmclean/verify/text_protect.py` & `engine.py`
 - L5 PDF Assembly & Stream Re-encoding      -> `wmclean/assemble/`
-- Pydantic Contracts (`r.json`, schemas)    -> `wmclean/schemas.py`
+- Pydantic Contracts & Optional Deps        -> `wmclean/schemas.py` & `wmclean/deps.py`
 
 ## 3. LOW-TOKEN VERIFICATION COMMANDS (USE THESE INSTEAD OF VERBOSE PYTEST)
 - Fast lint & typecheck (quiet): `make check-q`
 - Fast unit test (quiet, failures only): `pytest -q --tb=line --no-header`
+- End-to-end smoke test: `make smoke`

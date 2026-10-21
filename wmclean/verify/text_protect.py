@@ -55,20 +55,21 @@ def compute_fg_protection_mask(
     if has_doxapy():
         try:
             doxa = get_doxapy()
-            algo_enum = getattr(
-                doxa.Binarization.Algorithms,
-                algorithm.upper(),
-                doxa.Binarization.Algorithms.ISAUVOLA,
-            )
-            # Ensure odd window size >= 3
-            w = max(3, window if window % 2 != 0 else window + 1)
-            params = {"window": w, "k": float(k)}
-            # doxapy returns 0 for foreground text, 255 for background
-            bin_img = doxa.to_binary(algo_enum, gray, params)
+            if doxa is not None:
+                algo_enum = getattr(
+                    doxa.Binarization.Algorithms,
+                    algorithm.upper(),
+                    doxa.Binarization.Algorithms.ISAUVOLA,
+                )
+                # Ensure odd window size >= 3
+                w = max(3, window if window % 2 != 0 else window + 1)
+                params = {"window": w, "k": float(k)}
+                # doxapy returns 0 for foreground text, 255 for background
+                bin_img = doxa.to_binary(algo_enum, gray, params)
 
-            # Intersect with absolute darkness threshold to reject faint watermark tints
-            fg_bool = (bin_img == 0) & (gray <= max_fg_luminance)
-            return (fg_bool.astype(np.uint8) * 255)
+                # Intersect with absolute darkness threshold to reject faint watermark tints
+                fg_bool = (bin_img == 0) & (gray <= max_fg_luminance)
+                return (fg_bool.astype(np.uint8) * 255)
         except Exception as e:
             logger.debug("doxapy binarization failed, falling back to OpenCV: %s", e)
 

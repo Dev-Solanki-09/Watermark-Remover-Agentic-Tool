@@ -65,26 +65,27 @@ def guided_filter_matte(
     alpha = trimap.copy()
 
     # Refine alpha matte using pymatting or cv2.ximgproc.guidedFilter
-    pymatting = get_pymatting()
-    use_pymatting = (pymatting is not None) and (h <= 512 and w <= 512)
+    pym_mod = get_pymatting()
+    use_pymatting = (pym_mod is not None) and (h <= 512 and w <= 512)
 
-    if use_pymatting:
+    if use_pymatting and pym_mod is not None:
         try:
             img_norm = page_img.astype(np.float64) / 255.0
             if img_norm.ndim == 2:
                 img_norm = np.stack([img_norm] * 3, axis=-1)
-            alpha_refined = pymatting.estimate_alpha_cf(img_norm, trimap.astype(np.float64))
+            alpha_refined = pym_mod.estimate_alpha_cf(img_norm, trimap.astype(np.float64))
             alpha = np.clip(alpha_refined, 0.0, 1.0).astype(np.float32)
         except Exception as exc:
             logger.debug("pymatting CF failed (%s), falling back to guided filter", exc)
             use_pymatting = False
 
     if not use_pymatting:
-        if has_cv2_contrib():
+        ximgproc = getattr(cv2, "ximgproc", None)
+        if has_cv2_contrib() and ximgproc is not None:
             try:
                 guide = page_img.astype(np.float32) / 255.0
                 src = trimap.astype(np.float32)
-                alpha = cv2.ximgproc.guidedFilter(guide=guide, src=src, radius=4, eps=1e-3)
+                alpha = ximgproc.guidedFilter(guide=guide, src=src, radius=4, eps=1e-3)
                 alpha = np.clip(alpha, 0.0, 1.0)
             except Exception as exc:
                 logger.debug("guidedFilter failed (%s), using Gaussian fallback", exc)

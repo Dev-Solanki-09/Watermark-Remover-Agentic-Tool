@@ -10,7 +10,7 @@ Guarantees:
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pikepdf
@@ -20,7 +20,6 @@ from wmclean.schemas import (
     PageKind,
     PageState,
     RemoverMethod,
-    RemoverParams,
     VerifyResult,
 )
 from wmclean.verify.exact import verify_exact
@@ -50,7 +49,7 @@ class VerificationEngine:
         pdf: pikepdf.Pdf,
         page_idx: int,
         page_kind: PageKind,
-        remover_funcs: list[tuple[RemoverMethod, Callable, RemoverParams] | tuple[RemoverMethod, Callable, RemoverParams, Optional[tuple[int, int, int, int]]]],
+        remover_funcs: list[Any],
         mask_bbox: Optional[list[float]] = None,
         known_wm_texts: Optional[list[str]] = None,
         template: Optional[np.ndarray] = None,
@@ -80,9 +79,9 @@ class VerificationEngine:
 
         for item in remover_funcs:
             if len(item) == 4:
-                method, func, params, item_roi = item  # type: ignore[misc]
+                method, func, params, item_roi = item
             else:
-                method, func, params = item  # type: ignore[misc]
+                method, func, params = item
                 item_roi = roi_bbox
 
             logger.debug("Testing remover %s on page %d", method.value, page_idx + 1)

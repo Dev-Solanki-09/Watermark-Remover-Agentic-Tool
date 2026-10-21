@@ -7,6 +7,7 @@ if optional packages are unavailable.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import logging
 from typing import Any, Optional
 

@@ -8,7 +8,7 @@ version = "0.0.2a0"
 description = "CPU-only PDF watermark removal tool with deterministic verification and agent-friendly operational contracts"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 authors = [{ name = "watermark-remover-auto-agent-tool contributors" }]
 keywords = ["pdf", "watermark", "remover", "agent", "agent-tool", "pikepdf", "verification", "cpu-only"]
 classifiers = [
@@ -28,14 +28,14 @@ classifiers = [
 
 dependencies = [
     "pikepdf>=9.0",
-    "PyMuPDF>=1.28.2",
+    "PyMuPDF>=1.24.0",
     "numpy>=1.24",
     "opencv-python-headless>=4.8",
     "Pillow>=10.0",
     "pydantic>=2.0",
     "scipy>=1.12",
     "scikit-image>=0.22",
-    "doxapy>=0.9.4",
+    "doxapy>=0.9.4; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]

@@ -104,7 +104,9 @@ def test_beer_lambert_stain_unmix_red_stamp():
 
     # 1. Unobstructed stamp region [25:45, 25:45] should be whitened back to clean background
     unobstructed_red_after = cleaned[30:40, 30:40]
-    assert np.mean(unobstructed_red_after) > 220, f"Red stamp not whitened: mean={np.mean(unobstructed_red_after)}"
+    assert np.mean(unobstructed_red_after) > 220, (
+        f"Red stamp not whitened: mean={np.mean(unobstructed_red_after)}"
+    )
 
     # 2. Text outside stamp [10:20, 15:25] must remain dark and untouched
     text_outside = cleaned[12:18, 18:22]
@@ -198,13 +200,21 @@ def test_get_texttrace_vector_probing_and_ocr_protection(tmp_path):
         pike_page = pike_doc.pages[0]
         fitz_page = fitz_doc[0]
 
-        candidates = _extract_text_candidates(pike_page, page_num=1, total_pages=1, fitz_page=fitz_page)
+        candidates = _extract_text_candidates(
+            pike_page, page_num=1, total_pages=1, fitz_page=fitz_page
+        )
 
         # 1. Diagonal watermark must be detected
-        wm_cand = [c for c in candidates if "DRAFT" in c.norm_str or "WATERMARK" in c.norm_str or abs(c.rot_deg) > 5.0]
+        wm_cand = [
+            c
+            for c in candidates
+            if "DRAFT" in c.norm_str or "WATERMARK" in c.norm_str or abs(c.rot_deg) > 5.0
+        ]
         assert len(wm_cand) >= 1, "Failed to detect diagonal watermark candidate via get_texttrace"
         assert abs(wm_cand[0].rot_deg) > 5.0
 
         # 2. Invisible OCR text must NOT be extracted as a candidate (protected)
         ocr_cand = [c for c in candidates if "OCR" in c.norm_str or c.tr == 3]
-        assert len(ocr_cand) == 0, "Invisible OCR layer was mistakenly flagged as a watermark candidate!"
+        assert len(ocr_cand) == 0, (
+            "Invisible OCR layer was mistakenly flagged as a watermark candidate!"
+        )

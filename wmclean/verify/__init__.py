@@ -12,4 +12,3 @@ __all__ = [
     "compute_fg_protection_mask",
     "measure_stroke_recall_loss",
 ]
-

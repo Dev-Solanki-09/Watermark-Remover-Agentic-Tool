@@ -43,7 +43,7 @@ def test_raster_alpha_inv_g10(fixtures_dir: Path):
     grey = cv2.cvtColor(wm_img, cv2.COLOR_RGB2GRAY) if wm_img.ndim == 3 else wm_img
     h, w = grey.shape[:2]
     roi = np.zeros((h, w), dtype=bool)
-    roi[int(h * 0.45):int(h * 0.65), int(w * 0.10):int(w * 0.90)] = True
+    roi[int(h * 0.45) : int(h * 0.65), int(w * 0.10) : int(w * 0.90)] = True
     mask = (((grey > 200) & (grey < 248)) & roi).astype(np.uint8) * 255
 
     # Template has watermark value ~190

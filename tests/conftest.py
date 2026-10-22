@@ -21,4 +21,5 @@ def fixtures_dir() -> Path:
 def generated_fixtures(fixtures_dir: Path) -> dict:
     """Generate all synthetic test fixtures once for the test session."""
     from tests.fixture_gen import generate_all_fixtures
+
     return generate_all_fixtures(fixtures_dir)

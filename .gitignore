@@ -102,6 +102,9 @@ smoke_report.json
 *.log
 
 # Internal agent planning, prompt, and scratch markdown files
+[1-6].md
+handoff_plan.md
+task_checklist.md
 repo-polish.md
 wm-update.md
 execution_plan.md

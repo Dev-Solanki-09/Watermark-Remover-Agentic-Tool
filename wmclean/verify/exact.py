@@ -1,4 +1,4 @@
-"""L4 Exact AST & Vector Verifier — guarantees zero non-watermark text mutation
+"""L4 Exact AST & Vector Verifier — enforces zero non-watermark text mutation
 and zero pixel change outside the watermark bounding mask.
 
 Invariants:
@@ -74,7 +74,9 @@ def verify_exact(
         if any(w in txt for w in known_wm):
             return True
         # Common watermark stamp terms
-        if any(w in txt for w in ("confidential", "draft", "sample", "watermark", "copy", "approved")):
+        if any(
+            w in txt for w in ("confidential", "draft", "sample", "watermark", "copy", "approved")
+        ):
             return True
         return False
 
@@ -112,8 +114,10 @@ def verify_exact(
             buf_clean = io.BytesIO()
             clean_pdf.save(buf_clean)
 
-            with pymupdf.open(stream=buf_orig.getvalue(), filetype="pdf") as doc_o, \
-                 pymupdf.open(stream=buf_clean.getvalue(), filetype="pdf") as doc_c:
+            with (
+                pymupdf.open(stream=buf_orig.getvalue(), filetype="pdf") as doc_o,
+                pymupdf.open(stream=buf_clean.getvalue(), filetype="pdf") as doc_c,
+            ):
                 mat = pymupdf.Matrix(100.0 / 72.0, 100.0 / 72.0)
                 pix_o = doc_o[page_idx].get_pixmap(matrix=mat, colorspace=pymupdf.csGRAY)
                 pix_c = doc_c[page_idx].get_pixmap(matrix=mat, colorspace=pymupdf.csGRAY)
@@ -133,7 +137,9 @@ def verify_exact(
                     outside = ~mask
 
                     if outside.any():
-                        diff = np.abs(arr_o[outside].astype(np.int16) - arr_c[outside].astype(np.int16))
+                        diff = np.abs(
+                            arr_o[outside].astype(np.int16) - arr_c[outside].astype(np.int16)
+                        )
                         outside_diff = float(np.max(diff))
 
                         if outside_diff > 3.0:

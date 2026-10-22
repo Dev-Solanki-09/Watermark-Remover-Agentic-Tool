@@ -224,8 +224,14 @@ def _build_params(sig: ClusterSignature, records: list[ProbeRecord]) -> RemoverP
             if tc.norm_str not in params.target_texts:
                 params.target_texts.append(tc.norm_str)
         for pc in record.path_cand:
-            if pc.hash not in params.target_path_hashes:
-                params.target_path_hashes.append(pc.hash)
+            if (
+                getattr(pc, "is_light", False)
+                or (pc.ca is not None and pc.ca < 0.85)
+                or pc.is_clip
+                or (pc.doc_freq >= 0.70)
+            ):
+                if pc.hash not in params.target_path_hashes:
+                    params.target_path_hashes.append(pc.hash)
         for xc in record.xobj_cand:
             if xc.name not in params.target_xobj_names:
                 params.target_xobj_names.append(xc.name)

@@ -74,7 +74,7 @@ def raster_template_whiten(
 
     # Candidate watermark pixels: either from passed mask or grey range (130..250)
     if mask is not None and mask.sum() > 50:
-        wm_cand = (mask > 0)
+        wm_cand = mask > 0
     else:
         wm_cand = (grey > 130) & (grey < 250)
 
@@ -84,17 +84,21 @@ def raster_template_whiten(
             tmpl_resized = cv2.resize(template, (w, h))
         else:
             tmpl_resized = template
-        t_grey = cv2.cvtColor(tmpl_resized, cv2.COLOR_RGB2GRAY) if tmpl_resized.ndim == 3 else tmpl_resized
+        t_grey = (
+            cv2.cvtColor(tmpl_resized, cv2.COLOR_RGB2GRAY)
+            if tmpl_resized.ndim == 3
+            else tmpl_resized
+        )
         bg_t = float(np.percentile(t_grey, 95))
         delta = np.where((t_grey > 130) & (t_grey < 245), bg_t - t_grey.astype(np.float32), 0.0)
-        t_mask = (delta > 15)
+        t_mask = delta > 15
         if t_mask.sum() > 50:
             wm_cand = wm_cand & t_mask
 
     wm_to_whiten = wm_cand & (fg_protected == 0)
 
     # Estimate background value from paper background pixels (grey >= 240)
-    paper_bg = (grey >= 240)
+    paper_bg = grey >= 240
     bg_val = int(np.percentile(grey[paper_bg], 95)) if paper_bg.sum() > 100 else 255
 
     if result.ndim == 3:
@@ -170,7 +174,9 @@ def raster_alpha_inv(
     else:
         result = np.where(mask > 0, J, page_img)
 
-    logger.info("raster_alpha_inv: α=%.3f, processed %d watermark pixels", alpha, int(mask.sum() / 255))
+    logger.info(
+        "raster_alpha_inv: α=%.3f, processed %d watermark pixels", alpha, int(mask.sum() / 255)
+    )
     return result
 
 
@@ -200,14 +206,25 @@ def raster_color_unmix(
     if page_img.ndim != 3 or page_img.shape[2] != 3:
         return page_img
 
-    # Convert to LAB
-    lab = cv2.cvtColor(page_img, cv2.COLOR_RGB2LAB).astype(np.float32)
-    L = lab[:, :, 0]
-
-    # In watermark regions, suppress chroma (make achromatic)
     mask_bool = mask > 0
     if mask_bool.sum() == 0:
         return page_img
+
+    shield = None
+    try:
+        from wmclean.intelligence.doc_shield import parse_doc_shield
+
+        shield = parse_doc_shield(page_img, template_mask=mask)
+        mask_bool = (mask > 0) & (~shield.m_diagram)
+    except Exception:
+        pass
+
+    if mask_bool.sum() == 0:
+        return page_img
+
+    # Convert to LAB
+    lab = cv2.cvtColor(page_img, cv2.COLOR_RGB2LAB).astype(np.float32)
+    L = lab[:, :, 0]
 
     # Estimate background luminance from non-watermark regions
     bg_L = float(L[~mask_bool].mean()) if (~mask_bool).sum() > 0 else 200.0
@@ -222,6 +239,8 @@ def raster_color_unmix(
     result_lab[is_bg, 0] = bg_L
 
     result = cv2.cvtColor(result_lab.astype(np.uint8), cv2.COLOR_LAB2RGB)
+    if shield is not None:
+        result = shield.apply_text_core_lock(result, page_img, wm_mask=mask)
 
     logger.info("raster_color_unmix: desaturated %d watermark pixels", int(mask_bool.sum()))
     return result
@@ -346,7 +365,10 @@ def raster_fft_notch(
         else:
             result = np.where(mask > 0, cleaned, channel)
 
-    logger.info("raster_fft_notch: filtered %d spectral peaks", len(peak_coords) if 'peak_coords' in dir() else 0)
+    logger.info(
+        "raster_fft_notch: filtered %d spectral peaks",
+        len(peak_coords) if "peak_coords" in dir() else 0,
+    )
     return result
 
 
@@ -426,9 +448,7 @@ def raster_bitonal_despeckle(
     inverted = cv2.bitwise_not(result)
     wm_ink = cv2.bitwise_and(inverted, mask)
 
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        wm_ink, connectivity=8
-    )
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(wm_ink, connectivity=8)
 
     # Remove small components (halftone dots) while keeping large ones (text strokes)
     min_stroke_area = 15  # pixels — text strokes are larger than halftone dots
@@ -479,7 +499,9 @@ def raster_ml_inpaint(
     crop_w = x1 - x0
     crop_h = y1 - y0
     if crop_w > 512 or crop_h > 512:
-        logger.warning("raster_ml_inpaint: ROI %dx%d exceeds 512×512 limit, skipping", crop_w, crop_h)
+        logger.warning(
+            "raster_ml_inpaint: ROI %dx%d exceeds 512×512 limit, skipping", crop_w, crop_h
+        )
         return page_img
 
     import importlib.util
@@ -526,13 +548,17 @@ def illum_flatten(
     if float(np.std(bg)) < 6.0:
         return page_img  # already flat lighting
 
-    norm = np.clip(grey.astype(np.float32) / np.maximum(bg.astype(np.float32), 1.0) * 255.0, 0, 255).astype(np.uint8)
+    norm = np.clip(
+        grey.astype(np.float32) / np.maximum(bg.astype(np.float32), 1.0) * 255.0, 0, 255
+    ).astype(np.uint8)
 
     if page_img.ndim == 3:
         result = page_img.copy()
         for c in range(3):
             result[:, :, c] = np.clip(
-                page_img[:, :, c].astype(np.float32) / np.maximum(bg.astype(np.float32), 1.0) * 255.0,
+                page_img[:, :, c].astype(np.float32)
+                / np.maximum(bg.astype(np.float32), 1.0)
+                * 255.0,
                 0,
                 255,
             ).astype(np.uint8)
@@ -567,7 +593,9 @@ def ecc_align_stack(
         # Scale translation back to full resolution
         warp_matrix[0, 2] /= scale
         warp_matrix[1, 2] /= scale
-        aligned = cv2.warpAffine(target_img, warp_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+        aligned = cv2.warpAffine(
+            target_img, warp_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+        )
         return aligned
     except Exception as exc:
         logger.debug("ECC alignment failed (%s), returning unaligned", exc)
@@ -586,20 +614,30 @@ def raster_margin_banner(
 ) -> np.ndarray:
     """Remove scanner margin banners (e.g. CamScanner, TapScanner, footer stamps).
 
-    Detects isolated ink blocks in top or bottom 8% margins separated from body text
-    by at least 20px whitespace and replaces with paper background white.
+    Detects isolated ink blocks in top or bottom margins separated from body text
+    by whitespace and replaces with paper background white.
     """
     result = page_img.copy()
     h, w = page_img.shape[:2]
     grey = cv2.cvtColor(page_img, cv2.COLOR_RGB2GRAY) if page_img.ndim == 3 else page_img.copy()
+    paper_val = int(np.percentile(grey[grey >= 240], 95)) if (grey >= 240).sum() > 100 else 255
+
+    # If the input is already a cropped sub-page ROI strip (e.g., from apply_in_roi)
+    if h < 250:
+        ink = grey < 200
+        if ink.sum() > 20:
+            if result.ndim == 3:
+                result[ink] = paper_val
+            else:
+                result[ink] = paper_val
+            logger.info("raster_margin_banner: stripped banner in ROI crop [%dx%d]", w, h)
+        return result
 
     # Check top margin and bottom margin (8% height)
     m_h = int(h * 0.08)
-    paper_val = int(np.percentile(grey[grey >= 240], 95)) if (grey >= 240).sum() > 100 else 255
-
     for y0, y1 in [(0, m_h), (h - m_h, h)]:
         roi_grey = grey[y0:y1, :]
-        ink = (roi_grey < 160)
+        ink = roi_grey < 160
         if ink.sum() > 30:
             # Check horizontal whitespace separation between margin and body text
             if y0 == 0:
@@ -631,7 +669,9 @@ def inverted_banner_strip(
 
     # Find solid dark components (luminance < 60)
     dark_mask = (grey < 60).astype(np.uint8)
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        dark_mask, connectivity=8
+    )
 
     paper_val = int(np.percentile(grey[grey >= 240], 95)) if (grey >= 240).sum() > 100 else 255
 
@@ -649,7 +689,9 @@ def inverted_banner_strip(
                 result[by : by + bh, bx : bx + bw] = paper_val
             else:
                 result[by : by + bh, bx : bx + bw] = paper_val
-            logger.info("inverted_banner_strip: stripped dark banner at [%d,%d,%d,%d]", bx, by, bw, bh)
+            logger.info(
+                "inverted_banner_strip: stripped dark banner at [%d,%d,%d,%d]", bx, by, bw, bh
+            )
 
     return result
 
@@ -685,5 +727,8 @@ def raster_hue_selective_unmix(
     params: Optional[RemoverParams] = None,
 ) -> np.ndarray:
     """Remove saturated watermark chroma while strictly protecting green/blue diagram hues."""
-    return raster_color_unmix(page_img, mask if mask is not None else np.zeros(page_img.shape[:2], dtype=np.uint8), params if params is not None else RemoverParams())
-
+    return raster_color_unmix(
+        page_img,
+        mask if mask is not None else np.zeros(page_img.shape[:2], dtype=np.uint8),
+        params if params is not None else RemoverParams(),
+    )

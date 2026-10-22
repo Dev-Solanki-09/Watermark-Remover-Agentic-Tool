@@ -144,7 +144,10 @@ def build_llm_fallback_decision(
             logger.info("LLM fallback successfully routed %d clusters", len(decision.clusters))
             return decision
         except Exception as exc:
-            logger.warning("LLM fallback call failed or invalid (%s); using deterministic fallback (0 retries)", exc)
+            logger.warning(
+                "LLM fallback call failed or invalid (%s); using deterministic fallback (0 retries)",
+                exc,
+            )
 
     # Fallback to deterministic rules
     actions = []

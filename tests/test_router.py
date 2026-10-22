@@ -175,9 +175,7 @@ def test_llm_fallback_error_resilience(tmp_path: Path):
     def bad_llm(summary, montage):
         raise RuntimeError("LLM API timeout 10s")
 
-    decision1 = build_llm_fallback_decision(
-        clusters, [r], det_fallback, llm_caller=bad_llm
-    )
+    decision1 = build_llm_fallback_decision(clusters, [r], det_fallback, llm_caller=bad_llm)
     assert len(decision1.clusters) == 1
     assert decision1.clusters[0].chain == [RemoverMethod.ANNOT_DEL]
 
@@ -185,9 +183,7 @@ def test_llm_fallback_error_resilience(tmp_path: Path):
     def invalid_llm(summary, montage):
         return {"not_valid": 123}
 
-    decision2 = build_llm_fallback_decision(
-        clusters, [r], det_fallback, llm_caller=invalid_llm
-    )
+    decision2 = build_llm_fallback_decision(clusters, [r], det_fallback, llm_caller=invalid_llm)
     assert len(decision2.clusters) == 1
     assert decision2.clusters[0].chain == [RemoverMethod.ANNOT_DEL]
 
@@ -204,9 +200,7 @@ def test_llm_fallback_error_resilience(tmp_path: Path):
             ]
         }
 
-    decision3 = build_llm_fallback_decision(
-        clusters, [r], det_fallback, llm_caller=valid_llm
-    )
+    decision3 = build_llm_fallback_decision(clusters, [r], det_fallback, llm_caller=valid_llm)
     assert len(decision3.clusters) == 1
     assert decision3.clusters[0].chain == [RemoverMethod.ANNOT_DEL]
 

@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watermark-remover-auto-agent-tool"
-version = "0.0.2a0"
-description = "CPU-only PDF watermark removal tool with deterministic verification and agent-friendly operational contracts"
+version = "0.0.1b0"
+description = "Deterministic CPU-only PDF forensic engine and agent-native surgical actuator"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "watermark-remover-auto-agent-tool contributors" }]
 keywords = ["pdf", "watermark", "remover", "agent", "agent-tool", "pikepdf", "verification", "cpu-only"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
@@ -36,6 +36,9 @@ dependencies = [
     "scipy>=1.12",
     "scikit-image>=0.22",
     "doxapy>=0.9.4; python_version >= '3.12'",
+    "fonttools>=4.67.0",
+    "sknw>=0.15",
+    "skan>=0.13.1",
 ]
 
 [project.optional-dependencies]
@@ -72,3 +75,8 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 show_error_codes = true
 disable_error_code = ["operator", "misc", "var-annotated"]
+
+[dependency-groups]
+dev = [
+    "scipy-stubs>=1.17.1.5",
+]

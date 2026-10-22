@@ -227,9 +227,7 @@ def _extract_gs_alpha(page: pikepdf.Page) -> list[ExtGStateInfo]:
 
         # Only include if there's transparency or non-normal blend mode info
         if ca is not None or CA is not None or (bm and bm != "/Normal") or smask:
-            results.append(
-                ExtGStateInfo(name=str(name), ca=ca, CA=CA, bm=bm, smask=smask)
-            )
+            results.append(ExtGStateInfo(name=str(name), ca=ca, CA=CA, bm=bm, smask=smask))
 
     return results
 
@@ -267,7 +265,7 @@ def _extract_text_candidates(
 
                     opacity = float(trace.get("opacity", 1.0))
                     is_translucent = opacity < 0.85
-                    is_stroke_outline = (t_type == 1)
+                    is_stroke_outline = t_type == 1
 
                     font_size = float(trace.get("size", 0.0))
                     font = str(trace.get("font", ""))
@@ -282,7 +280,7 @@ def _extract_text_candidates(
                     else:
                         r, g, b = 0.0, 0.0, 0.0
 
-                    is_light = (r > 0.4 or g > 0.4 or b > 0.4)
+                    is_light = r > 0.4 or g > 0.4 or b > 0.4
 
                     chars = trace.get("chars", [])
                     raw_text = "".join(chr(c[0]) for c in chars if c[0] > 0).strip()
@@ -295,7 +293,10 @@ def _extract_text_candidates(
                     # - Stroke-only outline (type == 1)
                     # - Watermark keyword match with large/light/rotated text
                     is_wm = (
-                        (is_diagonal and (has_kw or font_size >= 14.0 or is_translucent or is_stroke_outline))
+                        (
+                            is_diagonal
+                            and (has_kw or font_size >= 14.0 or is_translucent or is_stroke_outline)
+                        )
                         or (is_translucent and (has_kw or font_size >= 14.0 or is_stroke_outline))
                         or (is_stroke_outline and (has_kw or font_size >= 14.0 or is_diagonal))
                         or (has_kw and (font_size >= 20.0 or is_light or is_diagonal))
@@ -346,10 +347,12 @@ def _extract_text_candidates(
                         r = ((int_color >> 16) & 0xFF) / 255.0
                         g = ((int_color >> 8) & 0xFF) / 255.0
                         b = (int_color & 0xFF) / 255.0
-                        is_light = (r > 0.4 or g > 0.4 or b > 0.4)
+                        is_light = r > 0.4 or g > 0.4 or b > 0.4
 
                         # Watermark candidate if: rotated text (watermark/title angle) OR keyword text that is large/light/rotated
-                        if (is_rotated and (has_kw or font_size >= 14.0)) or (has_kw and (font_size >= 20.0 or is_light or is_rotated)):
+                        if (is_rotated and (has_kw or font_size >= 14.0)) or (
+                            has_kw and (font_size >= 20.0 or is_light or is_rotated)
+                        ):
                             font = span.get("font", "")
                             bb = [float(x) for x in span.get("bbox", [0, 0, 0, 0])]
                             sig = _text_sig(norm, font, font_size, rot_deg)
@@ -379,7 +382,9 @@ def _extract_text_candidates(
 # ---------------------------------------------------------------------------
 
 
-def _extract_xobj_candidates(page: pikepdf.Page, kind: Optional[PageKind] = None) -> list[XObjCandidate]:
+def _extract_xobj_candidates(
+    page: pikepdf.Page, kind: Optional[PageKind] = None
+) -> list[XObjCandidate]:
     """Extract image and form XObject candidates from page resources."""
     results = []
     resources = page.get("/Resources")
@@ -450,15 +455,65 @@ def _extract_path_candidates(page: pikepdf.Page) -> list[PathCandidate]:
     path_start = None
     op_count = 0
     current_alpha = None
+    current_stroke_color = None
+    current_fill_color = None
 
     for operands, operator in cs:
         op_str = str(operator)
 
         if op_str == "gs" and operands:
-            # Track alpha from ExtGState — will be refined with actual gs lookup
-            pass
+            try:
+                gs_name = str(operands[0])
+                res = page.get("/Resources")
+                if res and "/ExtGState" in res:
+                    egs = res["/ExtGState"].get(gs_name)
+                    if egs:
+                        resolved = egs.resolve() if hasattr(egs, "resolve") else egs
+                        if "/ca" in resolved:
+                            current_alpha = float(resolved["/ca"])
+                        elif "/CA" in resolved:
+                            current_alpha = float(resolved["/CA"])
+            except Exception:
+                pass
 
-        if op_str in ("m", "l", "c", "v", "y", "re"):
+        elif op_str == "RG" and len(operands) >= 3:
+            try:
+                current_stroke_color = tuple(float(x) for x in operands[:3])
+            except Exception:
+                pass
+        elif op_str == "rg" and len(operands) >= 3:
+            try:
+                current_fill_color = tuple(float(x) for x in operands[:3])
+            except Exception:
+                pass
+        elif op_str == "G" and len(operands) >= 1:
+            try:
+                v = float(operands[0])
+                current_stroke_color = (v, v, v)
+            except Exception:
+                pass
+        elif op_str == "g" and len(operands) >= 1:
+            try:
+                v = float(operands[0])
+                current_fill_color = (v, v, v)
+            except Exception:
+                pass
+        elif op_str == "K" and len(operands) >= 4:
+            try:
+                k = float(operands[3])
+                v = max(0.0, 1.0 - k)
+                current_stroke_color = (v, v, v)
+            except Exception:
+                pass
+        elif op_str == "k" and len(operands) >= 4:
+            try:
+                k = float(operands[3])
+                v = max(0.0, 1.0 - k)
+                current_fill_color = (v, v, v)
+            except Exception:
+                pass
+
+        elif op_str in ("m", "l", "c", "v", "y", "re"):
             if path_start is None:
                 path_start = op_count
             path_ops.append((op_str, [str(o) for o in operands]))
@@ -469,6 +524,18 @@ def _extract_path_candidates(page: pikepdf.Page) -> list[PathCandidate]:
                 topo_key = "|".join(f"{op}:{','.join(args)}" for op, args in path_ops)
                 h = "p_" + hashlib.sha256(topo_key.encode()).hexdigest()[:6]
 
+                is_stroke = op_str in ("S", "s", "B", "B*", "b", "b*")
+                is_fill = op_str in ("f", "F", "f*", "B", "B*", "b", "b*")
+                light_stroke = (
+                    is_stroke
+                    and current_stroke_color
+                    and all(c >= 0.65 for c in current_stroke_color)
+                )
+                light_fill = (
+                    is_fill and current_fill_color and all(c >= 0.65 for c in current_fill_color)
+                )
+                is_light = bool(light_stroke or light_fill)
+
                 results.append(
                     PathCandidate(
                         hash=h,
@@ -477,6 +544,7 @@ def _extract_path_candidates(page: pikepdf.Page) -> list[PathCandidate]:
                         ca=current_alpha,
                         is_clip=False,
                         doc_freq=0.0,  # computed after all pages probed
+                        is_light=is_light,
                     )
                 )
             path_ops = []
@@ -573,9 +641,7 @@ def _check_revisions(pdf: pikepdf.Pdf) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 
-def probe_structural(
-    pdf: pikepdf.Pdf, page_num: int, fitz_page=None
-) -> ProbeRecord:
+def probe_structural(pdf: pikepdf.Pdf, page_num: int, fitz_page=None) -> ProbeRecord:
     """Run L0 structural probe on a single page.
 
     Returns a ProbeRecord with all structural fields populated.

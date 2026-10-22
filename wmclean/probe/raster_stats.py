@@ -107,7 +107,7 @@ class RasterReservoir:
 # ---------------------------------------------------------------------------
 
 
-def _compute_saturation_p95(rgb: np.ndarray) -> float:
+def _compute_saturation_p95(rgb: np.ndarray, doc_shield: Optional[object] = None) -> float:
     """Compute 95th percentile saturation from an RGB image."""
     if rgb.ndim != 3 or rgb.shape[2] != 3:
         return 0.0
@@ -117,11 +117,33 @@ def _compute_saturation_p95(rgb: np.ndarray) -> float:
     cmin = rgb.min(axis=2).astype(np.float32)
     denom = np.maximum(cmax, 1.0)
     sat = ((cmax - cmin) / denom * 255).astype(np.uint8)
+
+    # Exclude authentic author diagrams (e.g. green/blue biology diagrams, circuits)
+    if doc_shield is not None and hasattr(doc_shield, "m_diagram") and doc_shield.m_diagram.any():
+        import cv2
+
+        diag_m = doc_shield.m_diagram
+        if diag_m.shape != sat.shape:
+            diag_m = cv2.resize(diag_m.astype(np.uint8), (sat.shape[1], sat.shape[0])) > 0
+        diag_dilated = cv2.dilate(diag_m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        sat_cand = sat[~diag_dilated]
+    else:
+        sat_cand = sat
+
+    if sat_cand.size == 0:
+        return 0.0
+
     # Check top 0.5% (p99.5) which captures localized watermark stamps/text
-    # against predominantly achromatic document backgrounds
-    p99_5 = float(np.percentile(sat, 99.5))
-    p95 = float(np.percentile(sat, 95))
-    return max(p95, p99_5)
+    p99_5 = float(np.percentile(sat_cand, 99.5))
+    p95 = float(np.percentile(sat_cand, 95))
+    val = max(p95, p99_5)
+
+    # Detect localized chromatic stamps/icons (e.g. red hearts, stamps)
+    sat_nonzero = sat_cand[sat_cand > 25]
+    if sat_nonzero.size >= 150:
+        val = max(val, float(np.percentile(sat_nonzero, 50)))
+
+    return val
 
 
 def _estimate_watermark_alpha(
@@ -154,7 +176,9 @@ def _estimate_watermark_alpha(
 
 
 def _compute_template_ncc(
-    page_grey: np.ndarray, template: Optional[np.ndarray]
+    page_grey: np.ndarray,
+    template: Optional[np.ndarray],
+    doc_shield: Optional[object] = None,
 ) -> tuple[float, float]:
     """Compute NCC and coverage of template against page.
 
@@ -170,6 +194,22 @@ def _compute_template_ncc(
     diff = bg_val - template.astype(np.float32)
     mask = diff > 15
 
+    # Exclude authentic author text and diagrams from template correlation
+    if doc_shield is not None:
+        shield_mask = None
+        if hasattr(doc_shield, "m_ink_halo_shield") and hasattr(doc_shield, "m_diagram"):
+            shield_mask = doc_shield.m_ink_halo_shield | doc_shield.m_diagram
+        elif hasattr(doc_shield, "m_core"):
+            shield_mask = doc_shield.m_core
+        if shield_mask is not None and shield_mask.any():
+            if shield_mask.shape != mask.shape:
+                import cv2
+
+                shield_mask = (
+                    cv2.resize(shield_mask.astype(np.uint8), (mask.shape[1], mask.shape[0])) > 0
+                )
+            mask = mask & (~shield_mask)
+
     coverage = float(mask.sum()) / max(mask.size, 1)
     if mask.sum() < 100:
         return 0.0, round(coverage, 4)
@@ -184,7 +224,9 @@ def _compute_template_ncc(
     return round(max(0.0, ncc), 3), round(coverage, 4)
 
 
-def _detect_strips(page_pixmap_width: int, page_pixmap_height: int, xobj_count: int) -> tuple[bool, int]:
+def _detect_strips(
+    page_pixmap_width: int, page_pixmap_height: int, xobj_count: int
+) -> tuple[bool, int]:
     """Detect whether a page uses strip/tiled image layout."""
     # A page with multiple image XObjects of similar width suggests strips
     if xobj_count > 1:
@@ -193,13 +235,21 @@ def _detect_strips(page_pixmap_width: int, page_pixmap_height: int, xobj_count: 
 
 
 def _count_ocr_spans(page_grey: np.ndarray) -> int:
-    """Estimate OCR text span count from invisible text rendering.
+    """Estimate OCR/margin text span count from raster margins.
 
-    This is a heuristic — actual OCR span detection uses Tr=3 in content stream.
+    Checks top margin (0-10%) and bottom margin (90-100%) for ink pixels
+    (e.g., scanner banners, telegram stamps, header/footer text).
     """
-    # OCR span counting is done during structural probe via content stream
-    # This is a placeholder for raster-only estimation
-    return 0
+    h, w = page_grey.shape[:2]
+    top_m = page_grey[: max(1, int(h * 0.10)), :]
+    bot_m = page_grey[int(h * 0.90) :, :]
+
+    spans = 0
+    if np.sum(top_m < 180) > 40:
+        spans += 1
+    if np.sum(bot_m < 180) > 40:
+        spans += 1
+    return spans
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +308,7 @@ def probe_raster(
             return record
 
         # Detect bitonal
-        is_bitonal = (record.kind == PageKind.BITONAL)
+        is_bitonal = record.kind == PageKind.BITONAL
         if not is_bitonal:
             try:
                 page_obj = pdf.pages[page_num] if hasattr(pdf, "pages") else None
@@ -283,37 +333,64 @@ def probe_raster(
             pix.w, pix.h, len([x for x in record.xobj_cand if x.kind == "IMAGE"])
         )
 
-        # Saturation
-        sat_p95 = _compute_saturation_p95(rgb)
+        has_raster = any(x.kind == "IMAGE" for x in record.xobj_cand) or record.kind in (
+            PageKind.SCAN,
+            PageKind.SCAN_OCR,
+            PageKind.HYBRID,
+            PageKind.BITONAL,
+        )
 
-        # Reservoir sampling for template estimation
-        if reservoir is None:
-            reservoir = RasterReservoir()
+        doc_shield = None
+        if has_raster:
+            try:
+                from wmclean.intelligence.doc_shield import parse_doc_shield
 
-        bucket = reservoir.offer(grey.copy(), page_num)
-        template = bucket.compute_median_template()
+                doc_shield = parse_doc_shield(rgb)
+            except Exception:
+                doc_shield = None
 
-        # Template metrics
-        tmpl_ncc, tmpl_cov = _compute_template_ncc(grey, template)
+        # Saturation excluding author diagrams
+        sat_p95 = _compute_saturation_p95(rgb, doc_shield=doc_shield)
 
-        # Alpha estimation
-        est_alpha, est_wm_rgb = _estimate_watermark_alpha(grey, template)
-
-        # Position stability (requires at least 3 samples)
+        tmpl_ncc, tmpl_cov = 0.0, 0.0
+        est_alpha = 0.0
+        est_wm_rgb = [200, 200, 200]
         pos_stab = 0.0
-        if bucket.n_seen >= 3 and tmpl_ncc > 0.5:
-            pos_stab = tmpl_ncc  # simplified: high NCC implies stable position
+        ocr_spans = 0
+
+        if has_raster:
+            # Reservoir sampling for template estimation
+            if reservoir is None:
+                reservoir = RasterReservoir()
+
+            bucket = reservoir.offer(grey.copy(), page_num)
+            template = bucket.compute_median_template()
+
+            # Template metrics excluding authentic author text and diagrams
+            tmpl_ncc, tmpl_cov = _compute_template_ncc(grey, template, doc_shield=doc_shield)
+
+            # Alpha estimation (only when template matches the page)
+            if tmpl_ncc >= 0.35:
+                est_alpha, est_wm_rgb = _estimate_watermark_alpha(grey, template)
+            else:
+                est_alpha, est_wm_rgb = 0.0, [200, 200, 200]
+
+            # Position stability (requires at least 3 samples)
+            if bucket.n_seen >= 3 and tmpl_ncc > 0.5:
+                pos_stab = tmpl_ncc
+
+            ocr_spans = _count_ocr_spans(grey)
 
         record.ras_stats = RasterStats(
-            has_raster=any(x.kind == "IMAGE" for x in record.xobj_cand) or pix.w * pix.h > 0,
+            has_raster=has_raster,
             is_bitonal=is_bitonal,
             is_tiled_strips=is_tiled,
             strip_count=strip_count,
-            ocr_spans=_count_ocr_spans(grey),
+            ocr_spans=ocr_spans,
             tmpl_cov=tmpl_cov,
             tmpl_ncc=tmpl_ncc,
             pos_stab=pos_stab,
-            sat_p95=sat_p95,
+            sat_p95=sat_p95 if has_raster else 0.0,
             est_alpha=est_alpha,
             est_wm_rgb=est_wm_rgb,
         )

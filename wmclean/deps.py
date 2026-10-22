@@ -24,6 +24,7 @@ def has_cv2_contrib() -> bool:
     """Check if opencv-contrib extra modules (e.g. ximgproc) are available."""
     try:
         import cv2
+
         return hasattr(cv2, "ximgproc")
     except Exception:
         return False
@@ -53,6 +54,7 @@ def get_pymatting() -> Optional[Any]:
     _PYMATTING_CHECKED = True
     try:
         import pymatting
+
         _PYMATTING_MODULE = pymatting
         logger.debug("pymatting loaded successfully")
     except Exception as exc:
@@ -80,10 +82,12 @@ def get_rapidocr() -> Optional[Any]:
     try:
         if importlib.util.find_spec("rapidocr_onnxruntime") is not None:
             from rapidocr_onnxruntime import RapidOCR
+
             _RAPIDOCR_INSTANCE = RapidOCR()
             logger.debug("RapidOCR (rapidocr_onnxruntime) initialized")
         elif importlib.util.find_spec("rapidocr") is not None:
             from rapidocr import RapidOCR
+
             _RAPIDOCR_INSTANCE = RapidOCR()
             logger.debug("RapidOCR initialized")
     except Exception as exc:
@@ -111,6 +115,7 @@ def get_doxapy() -> Optional[Any]:
     _DOXAPY_CHECKED = True
     try:
         import doxapy
+
         _DOXAPY_MODULE = doxapy
         logger.debug("doxapy loaded successfully")
     except Exception as exc:
@@ -118,3 +123,87 @@ def get_doxapy() -> Optional[Any]:
         _DOXAPY_MODULE = None
 
     return _DOXAPY_MODULE
+
+
+_FONTTOOLS_MODULE: Optional[Any] = None
+_FONTTOOLS_CHECKED: bool = False
+
+
+def has_fonttools() -> bool:
+    """Check if fonttools is available."""
+    return importlib.util.find_spec("fontTools") is not None
+
+
+def get_fonttools() -> Optional[Any]:
+    """Lazy-load and return fontTools module if installed."""
+    global _FONTTOOLS_MODULE, _FONTTOOLS_CHECKED
+    if _FONTTOOLS_CHECKED:
+        return _FONTTOOLS_MODULE
+
+    _FONTTOOLS_CHECKED = True
+    try:
+        import fontTools
+
+        _FONTTOOLS_MODULE = fontTools
+        logger.debug("fontTools loaded successfully")
+    except Exception as exc:
+        logger.debug("fontTools not available: %s", exc)
+        _FONTTOOLS_MODULE = None
+
+    return _FONTTOOLS_MODULE
+
+
+_SKAN_MODULE: Optional[Any] = None
+_SKAN_CHECKED: bool = False
+
+
+def has_skan() -> bool:
+    """Check if skan skeleton analysis library is available."""
+    return importlib.util.find_spec("skan") is not None
+
+
+def get_skan() -> Optional[Any]:
+    """Lazy-load and return skan module if installed."""
+    global _SKAN_MODULE, _SKAN_CHECKED
+    if _SKAN_CHECKED:
+        return _SKAN_MODULE
+
+    _SKAN_CHECKED = True
+    try:
+        import skan
+
+        _SKAN_MODULE = skan
+        logger.debug("skan loaded successfully")
+    except Exception as exc:
+        logger.debug("skan not available: %s", exc)
+        _SKAN_MODULE = None
+
+    return _SKAN_MODULE
+
+
+_SKNW_MODULE: Optional[Any] = None
+_SKNW_CHECKED: bool = False
+
+
+def has_sknw() -> bool:
+    """Check if sknw skeleton network library is available."""
+    return importlib.util.find_spec("sknw") is not None
+
+
+def get_sknw() -> Optional[Any]:
+    """Lazy-load and return sknw module if installed."""
+    global _SKNW_MODULE, _SKNW_CHECKED
+    if _SKNW_CHECKED:
+        return _SKNW_MODULE
+
+    _SKNW_CHECKED = True
+    try:
+        import sknw
+
+        _SKNW_MODULE = sknw
+        logger.debug("sknw loaded successfully")
+    except Exception as exc:
+        logger.debug("sknw not available: %s", exc)
+        _SKNW_MODULE = None
+
+    return _SKNW_MODULE

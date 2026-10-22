@@ -125,6 +125,7 @@ def test_e2e_m04_encrypted(fixtures_dir: Path, tmp_path: Path):
 
     # Create a locked PDF with non-empty user password
     from tests.fixture_gen import create_seed_vector
+
     create_seed_vector(clean_path, pages=1)
 
     pdf = pikepdf.open(str(clean_path))
@@ -136,16 +137,18 @@ def test_e2e_m04_encrypted(fixtures_dir: Path, tmp_path: Path):
     report_json = tmp_path / "report_locked.json"
 
     # With correct password "secret123" -> exit code 0
-    exit_code = main([
-        "run",
-        str(locked_pdf),
-        "-o",
-        str(out_pdf),
-        "--password",
-        "secret123",
-        "--report",
-        str(report_json),
-    ])
+    exit_code = main(
+        [
+            "run",
+            str(locked_pdf),
+            "-o",
+            str(out_pdf),
+            "--password",
+            "secret123",
+            "--report",
+            str(report_json),
+        ]
+    )
     assert exit_code == 0
     assert out_pdf.exists()
 

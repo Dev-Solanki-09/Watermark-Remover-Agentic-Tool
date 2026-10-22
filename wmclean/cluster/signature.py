@@ -59,9 +59,15 @@ def _canonicalize_features(record: ProbeRecord) -> dict:
             elif x.kind == "FORM":
                 carriers.append(CarrierFlag.XOBJ_FORM.value)
     if record.path_cand:
-        carriers.append(CarrierFlag.VEC_PATH.value)
         if any(pc.is_clip for pc in record.path_cand):
             carriers.append(CarrierFlag.CLIP_PATH.value)
+        if any(
+            getattr(pc, "is_light", False)
+            or (pc.ca is not None and pc.ca < 0.85)
+            or (pc.doc_freq >= 0.70)
+            for pc in record.path_cand
+        ):
+            carriers.append(CarrierFlag.VEC_PATH.value)
     if any(g.smask for g in record.gs_alpha):
         carriers.append(CarrierFlag.SMASK.value)
     if any(g.bm and g.bm not in ("/Normal", "") for g in record.gs_alpha):
@@ -88,7 +94,16 @@ def _canonicalize_features(record: ProbeRecord) -> dict:
 
     # Path topology hashes
     if record.path_cand:
-        features["path_hashes"] = sorted(set(pc.hash for pc in record.path_cand))
+        wm_paths = [
+            pc
+            for pc in record.path_cand
+            if (pc.doc_freq >= 0.5)
+            or (pc.ca is not None and pc.ca < 0.85)
+            or getattr(pc, "is_light", False)
+            or pc.is_clip
+        ]
+        if wm_paths:
+            features["path_hashes"] = sorted(set(pc.hash for pc in wm_paths))
 
     # Raster bucket
     rs = record.ras_stats
@@ -128,9 +143,7 @@ def compute_signature(record: ProbeRecord) -> ClusterSignature:
         carrier_flags=carrier_flags,
         quant_geom_aspect=features["geom_aspect"],
         norm_text_pattern=(
-            features.get("text_patterns", [None])[0]
-            if features.get("text_patterns")
-            else None
+            features.get("text_patterns", [None])[0] if features.get("text_patterns") else None
         ),
         rot_bucket=features.get("text_rot", record.geom.rot),
         color_bucket=features.get("color_bucket", "UNKNOWN"),

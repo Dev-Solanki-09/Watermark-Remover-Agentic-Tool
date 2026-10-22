@@ -92,18 +92,38 @@ def verify_raster(
     outside_mask = ~wm_mask if wm_mask is not None else np.ones_like(orig_grey, dtype=bool)
 
     # 2. Foreground Content Loss (L_fg)
+    # Check for corrupt/blank output image
+    if float(np.std(clean_grey)) < 2.0:
+        fg_m = compute_fg_protection_mask(orig_grey)
+        blank_loss = 1.0 if np.sum(fg_m > 0) > 10 else 0.0
+        return VerifyResult(
+            passed=False,
+            content_loss=blank_loss,
+            failure_code=FailureCode.ERR_DIAGRAM_INTEGRITY,
+            reason="Output image is corrupt or completely blank (std < 2.0)",
+        )
+
     # Identify foreground strokes with C++ SIMD ISauvola binarization
     fg_mask = compute_fg_protection_mask(orig_grey)
     orig_fg = fg_mask > 0
-    total_eval_fg = int(np.sum(orig_fg))
+    # Exclude confirmed watermark pixels so erased watermark ink is not miscounted as lost text
+    if wm_mask is not None:
+        wm_bool = wm_mask > 0 if wm_mask.dtype != bool else wm_mask
+        eval_fg = orig_fg & (~wm_bool)
+    else:
+        eval_fg = orig_fg
+
+    total_eval_fg = int(np.sum(eval_fg))
 
     content_loss = 0.0
     if total_eval_fg > 50:
-        erased_fg = orig_fg & (clean_grey > 200)
+        erased_fg = eval_fg & (clean_grey > 200)
         content_loss = float(np.sum(erased_fg)) / total_eval_fg
 
         if content_loss > _MAX_CONTENT_LOSS:
-            logger.warning("verify_raster failed: L_fg=%.4f > %.4f", content_loss, _MAX_CONTENT_LOSS)
+            logger.warning(
+                "verify_raster failed: L_fg=%.4f > %.4f", content_loss, _MAX_CONTENT_LOSS
+            )
             return VerifyResult(
                 passed=False,
                 content_loss=round(content_loss, 4),
@@ -115,15 +135,25 @@ def verify_raster(
     residual = 0.0
     if wm_mask is not None and np.sum(wm_mask) > 100:
         bg_val = float(np.percentile(clean_grey, 95))
-        # Evaluate watermark residual in non-foreground background regions under the watermark
-        # (Foreground text strokes are dark and evaluated by L_fg)
-        bg_eval_mask = wm_mask & (orig_grey >= 120)
+        # Protect author diagrams, text cores, and halos from being evaluated as residual watermark
+        from wmclean.intelligence.doc_shield import parse_doc_shield
+
+        shield = parse_doc_shield(
+            orig_img if orig_img is not None else orig_grey, template_mask=wm_mask
+        )
+        bg_eval_mask = (
+            wm_mask & (~shield.m_diagram) & (~shield.m_ink_halo_shield) & (orig_grey >= 120)
+        )
         if np.sum(bg_eval_mask) > 50:
             wm_region = clean_grey[bg_eval_mask].astype(np.float32)
             residual = float(np.mean(np.abs(wm_region - bg_val))) / 255.0
         else:
-            wm_region = clean_grey[wm_mask].astype(np.float32)
-            residual = float(np.mean(np.abs(wm_region - bg_val))) / 255.0
+            clean_eval = wm_mask & (~shield.m_diagram) & (~shield.m_ink_halo_shield)
+            if np.sum(clean_eval) > 50:
+                wm_region = clean_grey[clean_eval].astype(np.float32)
+                residual = float(np.mean(np.abs(wm_region - bg_val))) / 255.0
+            else:
+                residual = 0.0
 
         if residual > _MAX_RESIDUAL:
             logger.warning("verify_raster failed: R_wm=%.4f > %.4f", residual, _MAX_RESIDUAL)
@@ -138,9 +168,18 @@ def verify_raster(
     # 4. Outside Mask Maximum Pixel Difference
     outside_diff = 0.0
     if wm_mask is not None and outside_mask.any():
-        outside_diff = float(np.max(np.abs(orig_grey[outside_mask].astype(np.int16) - clean_grey[outside_mask].astype(np.int16))))
+        outside_diff = float(
+            np.max(
+                np.abs(
+                    orig_grey[outside_mask].astype(np.int16)
+                    - clean_grey[outside_mask].astype(np.int16)
+                )
+            )
+        )
         if outside_diff > _MAX_OUTSIDE_DIFF:
-            logger.warning("verify_raster failed: outside_diff=%.1f > %.1f", outside_diff, _MAX_OUTSIDE_DIFF)
+            logger.warning(
+                "verify_raster failed: outside_diff=%.1f > %.1f", outside_diff, _MAX_OUTSIDE_DIFF
+            )
             return VerifyResult(
                 passed=False,
                 residual=round(residual, 4),

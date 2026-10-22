@@ -35,6 +35,7 @@ def test_verify_exact_rejects_text_modification(fixtures_dir: Path):
     """Verify exact catches and rejects modification of legitimate non-watermark body text."""
     clean_path = fixtures_dir / "clean_vector_verify.pdf"
     from tests.fixture_gen import create_seed_vector
+
     create_seed_vector(clean_path, pages=1)
 
     with pikepdf.open(str(clean_path)) as orig_pdf, pikepdf.open(str(clean_path)) as modified_pdf:
@@ -48,7 +49,9 @@ def test_verify_exact_rejects_text_modification(fixtures_dir: Path):
                 continue  # drop one text operator
             filtered.append((operands, operator))
 
-        modified_pdf.pages[0].Contents = modified_pdf.make_stream(pikepdf.unparse_content_stream(filtered))
+        modified_pdf.pages[0].Contents = modified_pdf.make_stream(
+            pikepdf.unparse_content_stream(filtered)
+        )
 
         result = verify_exact(orig_pdf, modified_pdf, 0)
         assert result.passed is False
@@ -98,7 +101,9 @@ def test_verify_raster_high_residual():
 def test_verify_raster_content_loss():
     """Verify raster rejects severe foreground content loss (L_fg > 0.020)."""
     orig = np.full((300, 300, 3), 255, dtype=np.uint8)
-    cv2.putText(orig, "Important Text Lines", (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.putText(
+        orig, "Important Text Lines", (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2
+    )
 
     # Over-aggressive cleaning erases legitimate text
     bad_clean = np.full((300, 300, 3), 255, dtype=np.uint8)

@@ -91,6 +91,15 @@ class RemoverMethod(str, enum.Enum):
     SWT_MORPH_RECONSTRUCT = "swt_morph_reconstruct"
     BEER_LAMBERT_STAIN_UNMIX = "beer_lambert_stain_unmix"
     RASTER_ML_INPAINT = "raster_ml_inpaint"
+    BILINGUAL_TWIN_CLONE = "bilingual_twin_clone"
+    DENSITY_SUB = "density_sub"
+    POINTWISE_HUE_AND_LUT = "pointwise_hue_and_lut"
+    MAXTREE_FILTER = "maxtree_filter"
+    SKELETON_GRAPH = "skeleton_graph"
+    MUPDF_LAYER_REDACT = "mupdf_layer_redact"
+    FONT_TABLE_ZERO = "font_table_zero"
+    CONTENTS_ARRAY_SLICE = "contents_array_slice"
+    SURGICAL_LAMA = "surgical_lama"
 
 
 class FailureCode(str, enum.Enum):
@@ -212,6 +221,7 @@ class PathCandidate(BaseModel):
     ca: Optional[float] = Field(default=None, description="Effective alpha")
     is_clip: bool = Field(default=False)
     doc_freq: float = Field(default=0.0)
+    is_light: bool = Field(default=False, description="Light stroke or fill color >= 0.65")
 
 
 class RasterStats(BaseModel):
@@ -305,6 +315,7 @@ class RemoverParams(BaseModel):
     luma_thresh: int = Field(default=165, ge=100, le=250)
     mask_dilate_px: int = Field(default=2, ge=0, le=5)
     inpaint_radius: int = Field(default=3, ge=1, le=7)
+    roi_bbox: Optional[tuple[int, int, int, int]] = None
 
 
 class ClusterAction(BaseModel):
@@ -400,6 +411,8 @@ class DocumentReport(BaseModel):
     perf: PerfReport = Field(default_factory=lambda: PerfReport(ms=0, peak_mb=0))
     clusters: list[ClusterReport] = Field(default_factory=list)
     pages: list[PageReport] = Field(default_factory=list)
-    error_detail: Optional[str] = Field(default=None, description="Deterministic exception detail on failure")
+    error_detail: Optional[str] = Field(
+        default=None, description="Deterministic exception detail on failure"
+    )
 
     model_config = {"populate_by_name": True}

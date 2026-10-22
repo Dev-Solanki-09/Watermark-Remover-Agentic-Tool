@@ -17,7 +17,7 @@ import io
 import logging
 import math
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pikepdf
 
@@ -54,7 +54,7 @@ def annot_del(page: pikepdf.Page, params: Optional[RemoverParams] = None) -> lis
             is_wm = True
         else:
             try:
-                annot = annot_ref.resolve() if hasattr(annot_ref, "resolve") else annot_ref
+                annot = annot_ref
                 sub = str(annot.get("/Subtype", ""))
                 # Subtype check
                 if sub in ("/Watermark", "/Stamp", "/FreeText"):
@@ -107,7 +107,7 @@ def ocg_strip(
     if oc_props and "/OCGs" in oc_props:
         for ocg_ref in oc_props["/OCGs"]:
             try:
-                ocg = ocg_ref.resolve() if hasattr(ocg_ref, "resolve") else ocg_ref
+                ocg = ocg_ref
                 xref = ocg_ref.objgen[0] if hasattr(ocg_ref, "objgen") else -1
                 name = str(ocg.get("/Name", ""))
                 is_wm = (xref in target_ocg_xrefs) or any(
@@ -124,7 +124,7 @@ def ocg_strip(
     res = page.get("/Resources")
     if res and "/Properties" in res:
         for prop_name, prop_ref in res["/Properties"].items():
-            name_str = str(prop_name)
+            name_str = prop_name
             try:
                 xref = prop_ref.objgen[0] if hasattr(prop_ref, "objgen") else -1
                 if xref in target_ocg_xrefs or any(
@@ -306,9 +306,8 @@ def text_op_strip(
                         )
                     )
                     diag = abs(block_rot) > 15 and abs(block_rot) < 75
-                    light_color = (
-                        entries[bt_start].state.fill_color
-                        and all(c >= 0.55 for c in entries[bt_start].state.fill_color)
+                    light_color = entries[bt_start].state.fill_color and all(
+                        c >= 0.55 for c in entries[bt_start].state.fill_color
                     )
                     if (kw_match and (diag or block_size >= 24)) or (
                         diag and light_color and block_size >= 28
@@ -380,12 +379,9 @@ def clip_scope_strip(
                     paint_ops.append(j)
 
             if has_clip and has_paint:
-                alpha_low = (
-                    entries[q_start].state.ca < 0.9 or entries[q_start].state.CA < 0.9
-                )
-                fill_light = (
-                    entries[q_start].state.fill_color
-                    and all(c >= 0.7 for c in entries[q_start].state.fill_color)
+                alpha_low = entries[q_start].state.ca < 0.9 or entries[q_start].state.CA < 0.9
+                fill_light = entries[q_start].state.fill_color and all(
+                    c >= 0.7 for c in entries[q_start].state.fill_color
                 )
                 for pj in paint_ops:
                     if entries[pj].state.fill_color and all(
@@ -426,7 +422,7 @@ def xobj_do_strip(
     res = page.get("/Resources")
     if res and "/XObject" in res:
         for xo_name, _ in res["/XObject"].items():
-            name_str = str(xo_name)
+            name_str = xo_name
             if not target_names:
                 if any(kw in name_str.lower() for kw in ("watermark", "stamp", "draft")):
                     target_names.add(name_str)
@@ -471,11 +467,7 @@ def _gc_xobjects(
 
     referenced = set()
     for entry in entries:
-        if (
-            entry.index not in removed_indices
-            and entry.operator == "Do"
-            and entry.operands
-        ):
+        if entry.index not in removed_indices and entry.operator == "Do" and entry.operands:
             name = str(entry.operands[0])
             referenced.add(name)
             referenced.add(name.lstrip("/"))
@@ -483,7 +475,7 @@ def _gc_xobjects(
     to_delete = [
         name
         for name in xobjects.keys()
-        if str(name) not in referenced and str(name).lstrip("/") not in referenced
+        if name not in referenced and name.lstrip("/") not in referenced
     ]
     for name in to_delete:
         del xobjects[name]
@@ -517,9 +509,7 @@ def vec_path_strip(
 
         elif op in ("S", "s", "f", "F", "f*", "B", "B*", "b", "b*"):
             if len(path_ops) >= 2:
-                topo_key = "|".join(
-                    f"{p_op}:{','.join(p_args)}" for p_op, p_args in path_ops
-                )
+                topo_key = "|".join(f"{p_op}:{','.join(p_args)}" for p_op, p_args in path_ops)
                 h = "p_" + hashlib.sha256(topo_key.encode()).hexdigest()[:6]
 
                 is_match = False
@@ -528,12 +518,8 @@ def vec_path_strip(
                 elif not target_hashes:
                     # Heuristic: stroke color is light grey or alpha < 0.85
                     state = entry.state
-                    light_stroke = state.stroke_color and all(
-                        c >= 0.65 for c in state.stroke_color
-                    )
-                    light_fill = state.fill_color and all(
-                        c >= 0.65 for c in state.fill_color
-                    )
+                    light_stroke = state.stroke_color and all(c >= 0.65 for c in state.stroke_color)
+                    light_fill = state.fill_color and all(c >= 0.65 for c in state.fill_color)
                     low_alpha = state.ca < 0.85 or state.CA < 0.85
                     if light_stroke or light_fill or low_alpha:
                         is_match = True
@@ -551,9 +537,7 @@ def vec_path_strip(
         transformed = processor.rebuild_with_replacements(set(), replace_map)
         new_stream = pikepdf.unparse_content_stream(transformed)
         page.Contents = pdf.make_stream(new_stream)
-        logger.info(
-            "vec_path_strip: replaced %d path paint ops with 'n'", removed_count
-        )
+        logger.info("vec_path_strip: replaced %d path paint ops with 'n'", removed_count)
 
     return removed_count
 
@@ -588,18 +572,12 @@ def pattern_sh_strip(
                 e = entries[j]
                 if e.operator == "sh":
                     is_pattern_block = True
-                elif (
-                    e.operator in ("cs", "CS")
-                    and e.operands
-                    and str(e.operands[0]) == "/Pattern"
-                ):
+                elif e.operator in ("cs", "CS") and e.operands and str(e.operands[0]) == "/Pattern":
                     is_pattern_block = True
                 elif e.operator == "re" and len(e.operands) >= 4:
                     w, h = abs(float(e.operands[2])), abs(float(e.operands[3]))
                     if w > 200 and h > 200:
-                        if e.state.fill_color and all(
-                            c >= 0.8 for c in e.state.fill_color
-                        ):
+                        if e.state.fill_color and all(c >= 0.8 for c in e.state.fill_color):
                             is_pattern_block = True
 
             if is_pattern_block:
@@ -611,9 +589,7 @@ def pattern_sh_strip(
         filtered = processor.rebuild_filtered(remove_indices)
         new_stream = pikepdf.unparse_content_stream(filtered)
         page.Contents = pdf.make_stream(new_stream)
-        logger.info(
-            "pattern_sh_strip: removed %d pattern/shading scopes", removed_count
-        )
+        logger.info("pattern_sh_strip: removed %d pattern/shading scopes", removed_count)
 
     return removed_count
 
@@ -650,9 +626,7 @@ def smask_gs_strip(
                 e = entries[j]
                 if e.operator == "gs" and e.operands:
                     gs_name = str(e.operands[0])
-                    if target_gs and (
-                        gs_name in target_gs or gs_name.lstrip("/") in target_gs
-                    ):
+                    if target_gs and (gs_name in target_gs or gs_name.lstrip("/") in target_gs):
                         has_smask_or_bm = True
                     elif e.state.smask or e.state.bm not in ("/Normal", "None", ""):
                         has_smask_or_bm = True
@@ -678,9 +652,7 @@ def smask_gs_strip(
 # ---------------------------------------------------------------------------
 
 
-def rev_rollback(
-    pdf: pikepdf.Pdf, file_path: Optional[Path] = None
-) -> Optional[pikepdf.Pdf]:
+def rev_rollback(pdf: pikepdf.Pdf, file_path: Optional[Path] = None) -> Optional[pikepdf.Pdf]:
     """Roll back to a pre-watermark PDF revision if available.
 
     Returns the clean revision Pdf object, or None if no clean revision found.
@@ -743,7 +715,11 @@ def decrypt(pdf: pikepdf.Pdf, password: str = "") -> pikepdf.Pdf:
 # ---------------------------------------------------------------------------
 
 
-def ast_tj_reassemble(page: pikepdf.Page, params: Optional[RemoverParams] = None) -> int:
+def ast_tj_reassemble(
+    pdf_or_page: Any,
+    page_or_params: Any = None,
+    params: Optional[RemoverParams] = None,
+) -> int:
     """Reassemble split-kerning TJ arrays across content stream and excise watermark text.
 
     Catches watermarks split into fragmented glyph arrays [(D) -20 (R) -15 (A) -20 (F) -18 (T)] TJ
@@ -752,13 +728,22 @@ def ast_tj_reassemble(page: pikepdf.Page, params: Optional[RemoverParams] = None
     Returns:
         Number of excised text operations.
     """
+    if hasattr(pdf_or_page, "pages") or hasattr(pdf_or_page, "make_stream"):
+        pdf = pdf_or_page
+        page = page_or_params
+        p_params = params
+    else:
+        page = pdf_or_page
+        pdf = getattr(page, "pdf", None) or getattr(getattr(page, "obj", None), "pdf", None)
+        p_params = page_or_params if isinstance(page_or_params, RemoverParams) else params
+
     try:
         ops = pikepdf.parse_content_stream(page)
     except Exception as exc:
         logger.debug("ast_tj_reassemble: failed to parse content stream: %s", exc)
         return 0
 
-    target_texts = [t.upper() for t in (params.target_texts if params else [])]
+    target_texts = [t.upper() for t in (p_params.target_texts if p_params else [])]
     # Generic watermark keywords if no specific target texts given
     default_keywords = [
         "CONFIDENTIAL",
@@ -794,7 +779,10 @@ def ast_tj_reassemble(page: pikepdf.Page, params: Optional[RemoverParams] = None
             is_wm = any(kw in full_text for kw in all_targets) if full_text else False
             if is_wm:
                 excised_count += 1
-                logger.info("ast_tj_reassemble: excised watermark BT..ET block matching '%s'", full_text[:40])
+                logger.info(
+                    "ast_tj_reassemble: excised watermark BT..ET block matching '%s'",
+                    full_text[:40],
+                )
             else:
                 new_ops.extend(current_bt_ops)
             current_bt_ops = []
@@ -814,8 +802,8 @@ def ast_tj_reassemble(page: pikepdf.Page, params: Optional[RemoverParams] = None
         else:
             new_ops.append((operands, operator))
 
-    if excised_count > 0:
-        page.Contents = page.pdf.make_stream(pikepdf.unparse_content_stream(new_ops))
+    if excised_count > 0 and pdf is not None:
+        page.Contents = pdf.make_stream(pikepdf.unparse_content_stream(new_ops))
 
     return excised_count
 
@@ -825,7 +813,11 @@ def ast_tj_reassemble(page: pikepdf.Page, params: Optional[RemoverParams] = None
 # ---------------------------------------------------------------------------
 
 
-def vec_spatial_band_cluster(page: pikepdf.Page, params: Optional[RemoverParams] = None) -> int:
+def vec_spatial_band_cluster(
+    pdf_or_page: Any,
+    page_or_params: Any = None,
+    params: Optional[RemoverParams] = None,
+) -> int:
     """Cluster and neutralize contiguous outlined bezier curves that form watermarks.
 
     Replaces painting operators (f, F, f*, B, B*, b, b*, s, S) of watermark paths
@@ -834,15 +826,24 @@ def vec_spatial_band_cluster(page: pikepdf.Page, params: Optional[RemoverParams]
     Returns:
         Number of neutralized path paint operators.
     """
+    if hasattr(pdf_or_page, "pages") or hasattr(pdf_or_page, "make_stream"):
+        pdf = pdf_or_page
+        page = page_or_params
+        p_params = params
+    else:
+        page = pdf_or_page
+        pdf = getattr(page, "pdf", None) or getattr(getattr(page, "obj", None), "pdf", None)
+        p_params = page_or_params if isinstance(page_or_params, RemoverParams) else params
+
     try:
         ops = pikepdf.parse_content_stream(page)
     except Exception as exc:
         logger.debug("vec_spatial_band_cluster: failed to parse content stream: %s", exc)
         return 0
 
-    target_hashes = set(params.target_path_hashes if params else [])
+    target_hashes = set(p_params.target_path_hashes if p_params else [])
     neutralized_count = 0
-    new_ops = []
+    new_ops: list[Any] = []
     paint_ops = {"f", "F", "f*", "B", "B*", "b", "b*", "s", "S"}
 
     for operands, operator in ops:
@@ -858,7 +859,70 @@ def vec_spatial_band_cluster(page: pikepdf.Page, params: Optional[RemoverParams]
         else:
             new_ops.append((operands, operator))
 
-    if neutralized_count > 0:
-        page.Contents = page.pdf.make_stream(pikepdf.unparse_content_stream(new_ops))
+    if neutralized_count > 0 and pdf is not None:
+        page.Contents = pdf.make_stream(pikepdf.unparse_content_stream(new_ops))
 
     return neutralized_count
+
+
+# ---------------------------------------------------------------------------
+# SOTA: Contents Array Stream-Slice Remover (contents_array_slice)
+# ---------------------------------------------------------------------------
+
+
+def contents_array_slice(
+    page: pikepdf.Page,
+    params: Optional[RemoverParams] = None,
+    stream_idx: Optional[int] = None,
+) -> bool:
+    """If page.Contents is an Array of streams, excise an appended or prepended watermark stream.
+
+    Args:
+        page: pikepdf.Page object
+        params: Optional RemoverParams
+        stream_idx: Optional specific index (e.g. -1 for appended, 0 for prepended)
+
+    Returns:
+        True if stream was removed from Contents array.
+    """
+    if "/Contents" not in page:
+        return False
+
+    c = page.Contents
+    if not isinstance(c, pikepdf.Array) or len(c) <= 1:
+        return False
+
+    target_idx = stream_idx if stream_idx is not None else -1
+    # Check if target stream contains watermark keywords
+    try:
+        s_obj = c[target_idx]
+        raw_b = s_obj.read_bytes().lower()
+        wm_keywords = [
+            b"watermark",
+            b"draft",
+            b"confidential",
+            b"sample",
+            b"telegram",
+            b"camscanner",
+        ]
+        is_wm = any(k in raw_b for k in wm_keywords)
+        if is_wm or stream_idx is not None:
+            new_arr = [
+                s
+                for idx, s in enumerate(c)
+                if idx != (len(c) + target_idx if target_idx < 0 else target_idx)
+            ]
+            if len(new_arr) == 1:
+                page.Contents = new_arr[0]
+            else:
+                page.Contents = pikepdf.Array(new_arr)
+            logger.info(
+                "contents_array_slice: sliced stream %d from Contents array (now %d streams)",
+                target_idx,
+                len(new_arr),
+            )
+            return True
+    except Exception as exc:
+        logger.debug("contents_array_slice failed: %s", exc)
+
+    return False

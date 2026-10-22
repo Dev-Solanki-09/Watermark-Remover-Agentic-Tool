@@ -24,7 +24,7 @@ def test_clamp_roi_bbox():
 
 
 def test_apply_in_roi_preserves_outside_pixels():
-    """Test that apply_in_roi guarantees 100% byte identity for outside pixels."""
+    """Test that apply_in_roi enforces 100% byte identity for outside pixels."""
     # Create test image with known gradient pattern
     np.random.seed(42)
     img = np.random.randint(0, 256, (200, 200, 3), dtype=np.uint8)

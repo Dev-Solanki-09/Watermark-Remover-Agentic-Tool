@@ -104,7 +104,7 @@ def guided_filter_matte(
         alpha[diagram_hues] = 0.0
 
     # Unmix against estimated paper background
-    paper_mask = (grey >= 240)
+    paper_mask = grey >= 240
     bg_val = float(np.percentile(grey[paper_mask], 95)) if paper_mask.sum() > 100 else 255.0
 
     # Clean watermark region: I_clean = (I - alpha * W) / (1 - alpha)

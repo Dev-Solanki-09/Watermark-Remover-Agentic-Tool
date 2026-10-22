@@ -35,6 +35,9 @@ This project is built for high-throughput, deterministic watermark removal with 
 [L5 Assemble]    ── Stream re-encoding, Flate compression, atomic output swap
     │
     ▼
+[L6 Steering]    ── Micro-DSL, zero-vision peek, Pareto auto-tuner & SQLite delta ledger
+    │
+    ▼
 [Output PDF + r.json Report]
 ```
 
@@ -101,7 +104,7 @@ We provide quiet targets in the root `Makefile` (and `make.bat` for Windows) tha
 # Fast lint & typecheck (silent on pass):
 make check-q
 
-# Fast unit test suite (60 tests, quiet, failures only):
+# Fast unit test suite (72 tests, quiet, failures only):
 make test-q
 
 # End-to-end smoke test (verifies doctor + synthetic run):

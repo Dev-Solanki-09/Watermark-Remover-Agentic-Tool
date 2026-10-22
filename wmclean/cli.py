@@ -57,6 +57,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Strip invalidated /Sig fields (default: true)",
     )
+    run_p.add_argument(
+        "--steer",
+        default=None,
+        help="Declarative steering micro-DSL override string",
+    )
 
     # --- batch ---
     batch_p = sub.add_parser("batch", help="Process a directory of PDFs")
@@ -68,12 +73,39 @@ def _build_parser() -> argparse.ArgumentParser:
     batch_p.add_argument("--resume", action="store_true", help="Resume from checkpoints")
     batch_p.add_argument("--enable-ml-fallback", action="store_true")
     batch_p.add_argument("--allow-size-growth", action="store_true")
+    batch_p.add_argument(
+        "--steer",
+        default=None,
+        help="Declarative steering micro-DSL override string",
+    )
 
     # --- plan ---
     plan_p = sub.add_parser("plan", help="Dry-run surgical intelligence planner")
     plan_p.add_argument("input", help="Input PDF path")
     plan_p.add_argument("--json", dest="json_out", default=None, help="Save plan as JSON")
     plan_p.add_argument("--password", default=None, help="PDF user password")
+
+    # --- peek ---
+    peek_p = sub.add_parser("peek", help="Zero-vision-token semantic page inspection")
+    peek_p.add_argument("input", help="Input PDF path")
+    peek_p.add_argument("-p", "--page", type=int, required=True, help="Page number (1-based)")
+    peek_p.add_argument(
+        "--crop-roi", default=None, help="Optional ROI id or normalized bbox [x1,y1,x2,y2]"
+    )
+    peek_p.add_argument(
+        "-o", "--output", default=None, help="Output PNG path for vision inspection crop"
+    )
+    peek_p.add_argument("--password", default=None, help="PDF user password")
+
+    # --- steer ---
+    steer_p = sub.add_parser("steer", help="Surgical delta time-travel re-steering and undo")
+    steer_p.add_argument("output_pdf", help="Target output PDF to re-steer")
+    steer_p.add_argument("--steer", default=None, help="Declarative steering micro-DSL")
+    steer_p.add_argument("--ticket", default=None, help="Escalation ticket ID (e.g. T1)")
+    steer_p.add_argument(
+        "--pick", choices=["OPT_A", "OPT_B", "OPT_C"], default=None, help="Pick ticket option"
+    )
+    steer_p.add_argument("--password", default=None, help="PDF user password")
 
     # --- inspect ---
     inspect_p = sub.add_parser("inspect", help="Dry-run probe (no modification)")
@@ -83,6 +115,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- doctor ---
     sub.add_parser("doctor", help="Pre-flight self-diagnostics")
 
+    # --- schema ---
+    sub.add_parser("schema", help="Output JSON tool-call schema for agents")
+
     return parser
 
 
@@ -91,6 +126,7 @@ def _write_error_report(args: argparse.Namespace | None, err_detail: str, code: 
         return
     try:
         import json
+
         rep_p = Path(args.report)
         in_p = getattr(args, "input", "unknown")
         out_p = getattr(args, "output", "unknown")
@@ -125,13 +161,20 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_plan(args)
         elif args.command == "batch":
             return _cmd_batch(args)
+        elif args.command == "peek":
+            return _cmd_peek(args)
+        elif args.command == "steer":
+            return _cmd_steer(args)
         elif args.command == "inspect":
             return _cmd_inspect(args)
         elif args.command == "doctor":
             return _cmd_doctor(args)
+        elif args.command == "schema":
+            return _cmd_schema(args)
         else:
             parser.print_help()
             return 40
+
     except (KeyboardInterrupt, SystemExit) as e:
         if isinstance(e, SystemExit):
             return int(e.code) if isinstance(e.code, int) else 0
@@ -169,6 +212,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         enable_ml=args.enable_ml_fallback,
         allow_size_growth=args.allow_size_growth,
         allow_break_signatures=args.allow_break_signatures,
+        steer_dsl=getattr(args, "steer", None),
     )
     return orch.execute()
 
@@ -205,6 +249,7 @@ def _cmd_batch(args: argparse.Namespace) -> int:
             resume=args.resume,
             enable_ml=args.enable_ml_fallback,
             allow_size_growth=args.allow_size_growth,
+            steer_dsl=getattr(args, "steer", None),
         )
         code = orch.execute()
         if code == 0:
@@ -214,12 +259,56 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         else:
             errors += 1
 
-    print(f"Batch completed: {total} files | SUCCESS={successes} | PARTIAL={partials} | ERRORS={errors}")
+    print(
+        f"Batch completed: {total} files | SUCCESS={successes} | PARTIAL={partials} | ERRORS={errors}"
+    )
     if errors > 0:
         return 40
     if partials > 0:
         return 10
     return 0
+
+
+def _cmd_peek(args: argparse.Namespace) -> int:
+    """Execute zero-vision-token semantic page inspection."""
+    from wmclean.intelligence.peek import peek_page
+
+    in_path = Path(args.input)
+    if not in_path.exists():
+        print(f"Error: file {in_path} not found", file=sys.stderr)
+        return 40
+
+    out_crop = str(args.output) if getattr(args, "output", None) else None
+    crop_roi = getattr(args, "crop_roi", None)
+    text_summary, _ = peek_page(
+        pdf_path=str(in_path),
+        page_num=args.page,
+        password=args.password,
+        crop_roi=crop_roi,
+        output_crop_path=out_crop,
+    )
+    print(text_summary)
+    return 0
+
+
+def _cmd_steer(args: argparse.Namespace) -> int:
+    """Execute surgical delta time-travel re-steering and undo."""
+    from wmclean.assemble.delta_ledger import re_steer_pdf
+
+    out_path = Path(args.output_pdf)
+    if not out_path.exists():
+        print(f"Error: file {out_path} not found", file=sys.stderr)
+        return 40
+
+    code, msg = re_steer_pdf(
+        target_pdf_path=str(out_path),
+        steer_dsl=getattr(args, "steer", None),
+        ticket_id=getattr(args, "ticket", None),
+        pick_opt=getattr(args, "pick", None),
+        password=args.password,
+    )
+    print(msg)
+    return code
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
@@ -250,7 +339,9 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
     print(f"INSPECT: {in_path.name} | pages={len(records)} | clusters={len(clusters)}")
     for act in decision.clusters:
-        print(f"  Cluster {act.sig_hash[:12]}: action={act.action} chain={[m.value for m in act.chain]}")
+        print(
+            f"  Cluster {act.sig_hash[:12]}: action={act.action} chain={[m.value for m in act.chain]}"
+        )
     return 0
 
 
@@ -284,7 +375,9 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     num_pages = len(records)
     subdoc_count = len(set(p.subdoc_id for p in plans)) if plans else 1
 
-    print(f"WMCLEAN PLAN | {in_path.name} ({num_pages} pages, {subdoc_count} sub-docs) | est_time={elapsed:.1f}s | llm_tokens=0")
+    print(
+        f"WMCLEAN PLAN | {in_path.name} ({num_pages} pages, {subdoc_count} sub-docs) | est_time={elapsed:.1f}s | llm_tokens=0"
+    )
 
     def _task_summary(plan, rec) -> str:
         if plan.is_untouched:
@@ -296,7 +389,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             w_px = max(1, int(abs(mb[2] - mb[0]) * 150 / 72))
             h_px = max(1, int(abs(mb[3] - mb[1]) * 150 / 72))
             norm_rois = [
-                f"[{r[0]/w_px:.2f},{r[1]/h_px:.2f},{r[2]/w_px:.2f},{r[3]/h_px:.2f}]"
+                f"[{r[0] / w_px:.2f},{r[1] / h_px:.2f},{r[2] / w_px:.2f},{r[3] / h_px:.2f}]"
                 for r in rois
             ]
             return f"{tasks_str} @ roi={','.join(norm_rois)}"
@@ -310,14 +403,16 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         if groups and groups[-1]["key"] == key and groups[-1]["end"] == plan.page - 1:
             groups[-1]["end"] = plan.page
         else:
-            groups.append({
-                "key": key,
-                "start": plan.page,
-                "end": plan.page,
-                "subdoc": plan.subdoc_id + 1,
-                "kind": kind_str,
-                "summary": summary,
-            })
+            groups.append(
+                {
+                    "key": key,
+                    "start": plan.page,
+                    "end": plan.page,
+                    "subdoc": plan.subdoc_id + 1,
+                    "kind": kind_str,
+                    "summary": summary,
+                }
+            )
 
     for g in groups:
         if g["start"] == g["end"]:
@@ -339,7 +434,11 @@ def _cmd_plan(args: argparse.Namespace) -> int:
                     "subdoc": p.subdoc_id + 1,
                     "untouched": p.is_untouched,
                     "tasks": [
-                        {"method": t.method.value, "roi_bbox": t.roi_bbox, "confidence": t.confidence}
+                        {
+                            "method": t.method.value,
+                            "roi_bbox": t.roi_bbox,
+                            "confidence": t.confidence,
+                        }
                         for t in p.tasks
                     ],
                 }
@@ -374,7 +473,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         except ImportError:
             missing.append(mod)
     if not missing:
-        passes.append("[PASS] Core dependencies (pikepdf, pymupdf, cv2, numpy, PIL, pydantic, sqlite3)")
+        passes.append(
+            "[PASS] Core dependencies (pikepdf, pymupdf, cv2, numpy, PIL, pydantic, sqlite3)"
+        )
     else:
         passes.append(f"[FAIL] Missing dependencies: {', '.join(missing)}")
 
@@ -386,11 +487,19 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         sota_status.append("scikit-image")
     if has_doxapy():
         sota_status.append("doxapy")
+    from wmclean.deps import has_fonttools, has_skan
+
+    if has_fonttools():
+        sota_status.append("fonttools")
+    if has_skan():
+        sota_status.append("skan")
     if has_pymatting():
         sota_status.append("pymatting")
     if has_rapidocr():
         sota_status.append("rapidocr")
-    passes.append(f"[PASS] SOTA extensions active: {', '.join(sota_status) if sota_status else 'none'}")
+    passes.append(
+        f"[PASS] SOTA extensions active: {', '.join(sota_status) if sota_status else 'none'}"
+    )
 
     # 3. Temp directory write permissions
     try:
@@ -436,6 +545,49 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     has_fail = any("[FAIL]" in line for line in passes)
     return 40 if has_fail else 0
+
+
+def _cmd_schema(args: argparse.Namespace) -> int:
+    """Print compact JSON tool-call schema for LLM / MCP agents."""
+    import json
+
+    schema = {
+        "name": "wmclean",
+        "description": "Deterministic CPU-only PDF watermark removal tool with sub-page ROI-locking and zero content degradation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "enum": ["run", "batch", "plan", "doctor", "schema"],
+                    "description": "Subcommand to execute",
+                },
+                "input": {
+                    "type": "string",
+                    "description": "Path to input PDF file or directory",
+                },
+                "output": {
+                    "type": "string",
+                    "description": "Path to output cleaned PDF file or directory",
+                },
+                "report": {
+                    "type": "string",
+                    "description": "Optional path for structured execution report JSON",
+                },
+                "password": {
+                    "type": "string",
+                    "description": "Optional user password for encrypted PDFs",
+                },
+                "resume": {
+                    "type": "boolean",
+                    "description": "Resume from checkpoint state",
+                },
+            },
+            "required": ["command", "input", "output"],
+        },
+    }
+    print(json.dumps(schema, indent=2))
+    return 0
 
 
 if __name__ == "__main__":

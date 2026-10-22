@@ -242,15 +242,11 @@ class StreamProcessor:
         Returns list of (operands, operator) tuples suitable for
         pikepdf.unparse_content_stream().
         """
-        return [
-            entry.raw for entry in self._entries if entry.index in keep_indices
-        ]
+        return [entry.raw for entry in self._entries if entry.index in keep_indices]
 
     def rebuild_filtered(self, remove_indices: set[int]) -> list[tuple]:
         """Rebuild content stream removing operators at specified indices."""
-        return [
-            entry.raw for entry in self._entries if entry.index not in remove_indices
-        ]
+        return [entry.raw for entry in self._entries if entry.index not in remove_indices]
 
     def rebuild_with_replacements(
         self,
@@ -277,4 +273,3 @@ class StreamProcessor:
 # Aliases for API compatibility
 ContentStreamAST = StreamProcessor
 OperationNode = StreamProcessor.Entry
-

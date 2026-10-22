@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import zlib
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -45,7 +45,7 @@ def encode_image(
     - RGB (24-bit): Flate or DCTDecode (JPEG)
     """
     h, w = img.shape[:2]
-    is_rgb = (img.ndim == 3 and img.shape[2] == 3)
+    is_rgb = img.ndim == 3 and img.shape[2] == 3
     orig_filter = str(orig_xobj.get("/Filter", "")) if orig_xobj else ""
 
     # Calculate target size ceiling if original size provided
@@ -77,7 +77,6 @@ def encode_image(
     # 2. RGB Image
     if is_rgb:
         # Check if original was JPEG or if Flate would exceed size cap
-        bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         raw_bytes = img.tobytes()
         flate_data = zlib.compress(raw_bytes, level=6)
 
@@ -85,24 +84,32 @@ def encode_image(
         use_jpeg = ("/DCT" in orig_filter) or (size_cap > 0 and len(flate_data) > size_cap)
 
         if use_jpeg:
-            quality = 90
-            success, jpeg_data = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            if success:
-                # If still over size cap, compress slightly more to respect 1.3x invariant
-                if size_cap > 0 and len(jpeg_data) > size_cap and quality > 75:
-                    _, jpeg_data = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            import io
 
-                stream = pdf.make_stream(
-                    jpeg_data.tobytes(),
-                    Type=pikepdf.Name.XObject,
-                    Subtype=pikepdf.Name.Image,
-                    Width=w,
-                    Height=h,
-                    ColorSpace=pikepdf.Name.DeviceRGB,
-                    BitsPerComponent=8,
-                    Filter=pikepdf.Name.DCTDecode,
-                )
-                return stream
+            from PIL import Image
+
+            pil_img = Image.fromarray(img)
+            buf = io.BytesIO()
+            pil_img.save(buf, format="JPEG", quality=96, subsampling=0, optimize=True)
+            jpeg_bytes = buf.getvalue()
+
+            # If still over size cap, compress slightly more to respect 1.3x invariant
+            if size_cap > 0 and len(jpeg_bytes) > size_cap:
+                buf = io.BytesIO()
+                pil_img.save(buf, format="JPEG", quality=85, subsampling=0, optimize=True)
+                jpeg_bytes = buf.getvalue()
+
+            stream = pdf.make_stream(
+                jpeg_bytes,
+                Type=pikepdf.Name.XObject,
+                Subtype=pikepdf.Name.Image,
+                Width=w,
+                Height=h,
+                ColorSpace=pikepdf.Name.DeviceRGB,
+                BitsPerComponent=8,
+                Filter=pikepdf.Name.DCTDecode,
+            )
+            return stream
 
         # Otherwise Flate
         stream = pdf.make_stream(
@@ -168,18 +175,35 @@ def update_page_image(
         xobjects = pikepdf.Dictionary()
         resources.XObject = xobjects
 
-    orig_xobj = xobjects.get(xobj_name)
-    if orig_xobj is not None:
-        orig_xobj = orig_xobj.resolve() if hasattr(orig_xobj, "resolve") else orig_xobj
+    # Find the matching key in xobjects dictionary (handling Name/str with/without slash)
+    target_key: Any = None
+    target_clean = str(xobj_name).lstrip("/")
+    for k in list(xobjects.keys()):
+        if str(k).lstrip("/") == target_clean:
+            target_key = k
+            break
+    if target_key is None:
+        target_key = pikepdf.Name(f"/{target_clean}")
 
-    encoded_stream = encode_image(pdf, new_img, orig_xobj=orig_xobj, is_bitonal=is_bitonal)
+    orig_xobj = xobjects.get(target_key)
+    resolved_orig = (
+        orig_xobj.resolve()
+        if (orig_xobj is not None and hasattr(orig_xobj, "resolve"))
+        else orig_xobj
+    )
+
+    encoded_stream = encode_image(pdf, new_img, orig_xobj=resolved_orig, is_bitonal=is_bitonal)
 
     # Copy ancillary metadata from original XObject if present
-    if orig_xobj is not None:
+    if resolved_orig is not None:
         for key in ("/Intent", "/Interpolate", "/SMask", "/Decode"):
-            if key in orig_xobj:
-                encoded_stream[key] = orig_xobj[key]
+            if key in resolved_orig:
+                encoded_stream[key] = resolved_orig[key]
 
-    clean_name = xobj_name if str(xobj_name).startswith("/") else f"/{xobj_name}"
-    xobjects[clean_name] = pdf.make_indirect(encoded_stream)
-    logger.debug("update_page_image: updated XObject %s (%dx%d)", clean_name, new_img.shape[1], new_img.shape[0])
+    xobjects[target_key] = encoded_stream
+    logger.debug(
+        "update_page_image: replaced XObject %s (%dx%d)",
+        target_key,
+        new_img.shape[1],
+        new_img.shape[0],
+    )

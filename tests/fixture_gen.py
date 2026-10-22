@@ -43,6 +43,7 @@ def _get_page_content_bytes(page: pikepdf.Page) -> bytes:
 # Seed PDF Generators
 # ---------------------------------------------------------------------------
 
+
 def create_seed_vector(path: Path, pages: int = 3) -> Path:
     """Create a clean multi-page academic vector PDF."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +82,7 @@ def create_seed_vector(path: Path, pages: int = 3) -> Path:
 
         body_text_col1 = (
             "1. Introduction\n"
-            "Document integrity requires rigorous guarantees against accidental data loss. "
+            "Document integrity requires rigorous safeguards against accidental data loss. "
             "When removing artifacts from archival documents, naive pixel thresholding often "
             "severs thin foreground glyph strokes. This experiment evaluates multi-tier "
             "verification strategies combining AST exact matching with bounded raster metrics.\n\n"
@@ -189,7 +190,7 @@ def create_seed_scan_ocr(path: Path, pages: int = 3, dpi: int = 150) -> Path:
         )
         page.insert_text(
             (72, 140),
-            "Document integrity requires rigorous guarantees against accidental data loss.",
+            "Document integrity requires rigorous safeguards against accidental data loss.",
             fontsize=9,
             render_mode=3,
         )
@@ -236,7 +237,9 @@ def create_seed_hybrid(path: Path, pages: int = 3) -> Path:
         page = doc.new_page(width=612, height=792)
 
         # Vector text
-        page.insert_text((72, 50), f"Hybrid Page {p + 1}: Vector Text + Embedded Diagram", fontsize=14)
+        page.insert_text(
+            (72, 50), f"Hybrid Page {p + 1}: Vector Text + Embedded Diagram", fontsize=14
+        )
         page.insert_text((72, 80), "The figure below illustrates system architecture.", fontsize=10)
 
         # Create a diagram bitmap (300 x 200)
@@ -252,8 +255,14 @@ def create_seed_hybrid(path: Path, pages: int = 3) -> Path:
         rect = pymupdf.Rect(156, 120, 456, 320)
         page.insert_image(rect, stream=diag_bytes)
 
-        page.insert_text((72, 350), "Figure 1: Pipeline stage decomposition and data flow.", fontsize=9)
-        page.insert_text((72, 380), "Subsequent text describes the probe and routing steps in detail.", fontsize=10)
+        page.insert_text(
+            (72, 350), "Figure 1: Pipeline stage decomposition and data flow.", fontsize=9
+        )
+        page.insert_text(
+            (72, 380),
+            "Subsequent text describes the probe and routing steps in detail.",
+            fontsize=10,
+        )
 
     doc.save(str(path))
     doc.close()
@@ -263,6 +272,7 @@ def create_seed_hybrid(path: Path, pages: int = 3) -> Path:
 # ---------------------------------------------------------------------------
 # Fixture Generators: G01–G19 (Master Coverage Matrix)
 # ---------------------------------------------------------------------------
+
 
 def gen_fx_g01_annot(out_dir: Path) -> Tuple[Path, Path, Dict]:
     """FX_G01: Annotation (/Watermark, /Stamp, /FreeText)."""
@@ -330,7 +340,9 @@ def gen_fx_g02_ocg(out_dir: Path) -> Tuple[Path, Path, Dict]:
         if "/Font" not in page.Resources:
             page.Resources.Font = pikepdf.Dictionary()
         page.Resources.Font["/Helv"] = pdf.make_indirect(
-            pikepdf.Dictionary(Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica)
+            pikepdf.Dictionary(
+                Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica
+            )
         )
 
         orig_stream = _get_page_content_bytes(page)
@@ -356,7 +368,9 @@ def gen_fx_g03_artifact(out_dir: Path) -> Tuple[Path, Path, Dict]:
         if "/Font" not in page.Resources:
             page.Resources.Font = pikepdf.Dictionary()
         page.Resources.Font["/Helv"] = pdf.make_indirect(
-            pikepdf.Dictionary(Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica)
+            pikepdf.Dictionary(
+                Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica
+            )
         )
 
         wm_stream = (
@@ -389,11 +403,13 @@ def gen_fx_g04_text_vec(out_dir: Path) -> Tuple[Path, Path, Dict]:
         if "/Font" not in page.Resources:
             page.Resources.Font = pikepdf.Dictionary()
         page.Resources.Font["/Helv"] = pdf.make_indirect(
-            pikepdf.Dictionary(Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica)
+            pikepdf.Dictionary(
+                Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica
+            )
         )
 
         # Include dynamic text: email and date
-        text = f"CONFIDENTIAL user_{p+1}@example.com 2026-10-20"
+        text = f"CONFIDENTIAL user_{p + 1}@example.com 2026-10-20"
         wm_stream = (
             f"\nq 0.7 0.7 0.7 rg\n"
             f"BT /Helv 36 Tf 0.707 0.707 -0.707 0.707 120 200 Tm ({text}) Tj ET\n"
@@ -444,11 +460,7 @@ def gen_fx_g06_xobj(out_dir: Path) -> Tuple[Path, Path, Dict]:
     pdf = pikepdf.open(str(clean))
 
     # Create a Form XObject for the watermark
-    form_stream = (
-        b"q 0.8 0.2 0.2 rg\n"
-        b"10 10 180 40 re f\n"
-        b"Q\n"
-    )
+    form_stream = b"q 0.8 0.2 0.2 rg\n10 10 180 40 re f\nQ\n"
     form_xobj = pdf.make_stream(
         form_stream,
         Type=pikepdf.Name.XObject,
@@ -483,12 +495,7 @@ def gen_fx_g07_vec_path(out_dir: Path) -> Tuple[Path, Path, Dict]:
     pdf = pikepdf.open(str(clean))
     for page in pdf.pages:
         # Diagonal banner vector paths
-        path_stream = (
-            b"\nq 0.8 0.8 0.8 RG 12 w\n"
-            b"50 100 m 550 700 l S\n"
-            b"50 140 m 550 740 l S\n"
-            b"Q\n"
-        )
+        path_stream = b"\nq 0.8 0.8 0.8 RG 12 w\n50 100 m 550 700 l S\n50 140 m 550 740 l S\nQ\n"
         orig = _get_page_content_bytes(page)
         page.Contents = pdf.make_stream(orig + path_stream)
 
@@ -508,12 +515,7 @@ def gen_fx_g08_pattern(out_dir: Path) -> Tuple[Path, Path, Dict]:
     # We inject a simulated shading rectangle fill
     pdf = pikepdf.open(str(clean))
     for page in pdf.pages:
-        shade_stream = (
-            b"\nq\n"
-            b"0.9 0.9 0.9 rg\n"
-            b"100 200 400 350 re f\n"
-            b"Q\n"
-        )
+        shade_stream = b"\nq\n0.9 0.9 0.9 rg\n100 200 400 350 re f\nQ\n"
         orig = _get_page_content_bytes(page)
         page.Contents = pdf.make_stream(orig + shade_stream)
     pdf.save(str(wm))
@@ -546,12 +548,7 @@ def gen_fx_g09_smask(out_dir: Path) -> Tuple[Path, Path, Dict]:
             page.Resources.ExtGState = pikepdf.Dictionary()
         page.Resources.ExtGState["/GS_SMask"] = gs_dict
 
-        smask_stream = (
-            b"\nq /GS_SMask gs\n"
-            b"0.5 0.5 0.5 rg\n"
-            b"100 200 412 392 re f\n"
-            b"Q\n"
-        )
+        smask_stream = b"\nq /GS_SMask gs\n0.5 0.5 0.5 rg\n100 200 412 392 re f\nQ\n"
         orig = _get_page_content_bytes(page)
         page.Contents = pdf.make_stream(orig + smask_stream)
 
@@ -714,7 +711,7 @@ def gen_fx_g13_ras_fft(out_dir: Path) -> Tuple[Path, Path, Dict]:
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w).copy()
 
         # Generate 2D periodic sine pattern: frequency = 0.05 cycles/pixel
-        y, x = np.mgrid[0:pix.h, 0:pix.w]
+        y, x = np.mgrid[0 : pix.h, 0 : pix.w]
         grid = (15.0 * np.sin(2.0 * np.pi * 0.04 * (x + y))).astype(np.float32)
         blended = np.clip(img.astype(np.float32) + grid, 0, 255).astype(np.uint8)
 
@@ -745,7 +742,9 @@ def gen_fx_g14_ras_inpaint(out_dir: Path) -> Tuple[Path, Path, Dict]:
         # Draw thin 2-pixel outline circular stamp in corner
         center = (int(pix.w * 0.85), int(pix.h * 0.15))
         cv2.circle(img, center, 50, 100, 2, cv2.LINE_AA)
-        cv2.putText(img, "VALID", (center[0] - 25, center[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 100, 1)
+        cv2.putText(
+            img, "VALID", (center[0] - 25, center[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 100, 1
+        )
 
         img_bytes = cv2.imencode(".png", img)[1].tobytes()
         out_page = out_doc.new_page(width=page.rect.width, height=page.rect.height)
@@ -784,8 +783,8 @@ def gen_fx_g15_bitonal_dither(out_dir: Path) -> Tuple[Path, Path, Dict]:
             cv2.LINE_AA,
         )
 
-        y, x = np.mgrid[0:pix.h, 0:pix.w]
-        checker = ((x + y) % 2 == 0)
+        y, x = np.mgrid[0 : pix.h, 0 : pix.w]
+        checker = (x + y) % 2 == 0
 
         # Watermark pixels where mask is white become dithered black dots
         arr[(mask > 0) & checker] = 0
@@ -817,12 +816,32 @@ def gen_fx_g16_tiled_scan(out_dir: Path) -> Tuple[Path, Path, Dict]:
 
     # 2 strips: top half (0 to 396), bottom half (396 to 792)
     top_strip = np.full((396, 612, 3), 250, dtype=np.uint8)
-    cv2.putText(top_strip, "Strip 1: Top Half Content", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.putText(
+        top_strip,
+        "Strip 1: Top Half Content",
+        (50, 100),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 0, 0),
+        2,
+    )
     bottom_strip = np.full((396, 612, 3), 250, dtype=np.uint8)
-    cv2.putText(bottom_strip, "Strip 2: Bottom Half Content", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.putText(
+        bottom_strip,
+        "Strip 2: Bottom Half Content",
+        (50, 100),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 0, 0),
+        2,
+    )
 
-    page_c.insert_image(pymupdf.Rect(0, 0, 612, 396), stream=cv2.imencode(".png", top_strip)[1].tobytes())
-    page_c.insert_image(pymupdf.Rect(0, 396, 612, 792), stream=cv2.imencode(".png", bottom_strip)[1].tobytes())
+    page_c.insert_image(
+        pymupdf.Rect(0, 0, 612, 396), stream=cv2.imencode(".png", top_strip)[1].tobytes()
+    )
+    page_c.insert_image(
+        pymupdf.Rect(0, 396, 612, 792), stream=cv2.imencode(".png", bottom_strip)[1].tobytes()
+    )
     doc_clean.save(str(clean))
     doc_clean.close()
 
@@ -831,12 +850,20 @@ def gen_fx_g16_tiled_scan(out_dir: Path) -> Tuple[Path, Path, Dict]:
     page_w = doc_wm.new_page(width=612, height=792)
 
     top_wm = top_strip.copy()
-    cv2.putText(top_wm, "CROSS STRIP WM", (100, 380), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (180, 180, 180), 3)
+    cv2.putText(
+        top_wm, "CROSS STRIP WM", (100, 380), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (180, 180, 180), 3
+    )
     bottom_wm = bottom_strip.copy()
-    cv2.putText(bottom_wm, "CROSS STRIP WM", (100, -16), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (180, 180, 180), 3)
+    cv2.putText(
+        bottom_wm, "CROSS STRIP WM", (100, -16), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (180, 180, 180), 3
+    )
 
-    page_w.insert_image(pymupdf.Rect(0, 0, 612, 396), stream=cv2.imencode(".png", top_wm)[1].tobytes())
-    page_w.insert_image(pymupdf.Rect(0, 396, 612, 792), stream=cv2.imencode(".png", bottom_wm)[1].tobytes())
+    page_w.insert_image(
+        pymupdf.Rect(0, 0, 612, 396), stream=cv2.imencode(".png", top_wm)[1].tobytes()
+    )
+    page_w.insert_image(
+        pymupdf.Rect(0, 396, 612, 792), stream=cv2.imencode(".png", bottom_wm)[1].tobytes()
+    )
     doc_wm.save(str(wm))
     doc_wm.close()
 
@@ -854,7 +881,9 @@ def gen_fx_g17_hybrid_diag_wm(out_dir: Path) -> Tuple[Path, Path, Dict]:
     doc = pymupdf.open()
     for p in range(2):
         page = doc.new_page(width=612, height=792)
-        page.insert_text((72, 50), f"Hybrid Page {p + 1}: Vector Text + Embedded Diagram", fontsize=14)
+        page.insert_text(
+            (72, 50), f"Hybrid Page {p + 1}: Vector Text + Embedded Diagram", fontsize=14
+        )
         page.insert_text((72, 80), "The figure below illustrates system architecture.", fontsize=10)
 
         # Diagram with baked light-grey watermark
@@ -866,12 +895,16 @@ def gen_fx_g17_hybrid_diag_wm(out_dir: Path) -> Tuple[Path, Path, Dict]:
         cv2.putText(diag, "L0 Probe", (195, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
         # Watermark text inside diagram
-        cv2.putText(diag, "DIAGRAM WM", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (190, 190, 190), 2)
+        cv2.putText(
+            diag, "DIAGRAM WM", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (190, 190, 190), 2
+        )
 
         diag_bytes = cv2.imencode(".png", diag)[1].tobytes()
         rect = pymupdf.Rect(156, 120, 456, 320)
         page.insert_image(rect, stream=diag_bytes)
-        page.insert_text((72, 350), "Figure 1: Pipeline stage decomposition and data flow.", fontsize=9)
+        page.insert_text(
+            (72, 350), "Figure 1: Pipeline stage decomposition and data flow.", fontsize=9
+        )
 
     doc.save(str(wm))
     doc.close()
@@ -900,9 +933,7 @@ def gen_fx_g18_compound_hybrid(out_dir: Path) -> Tuple[Path, Path, Dict]:
     pdf = pikepdf.open(str(wm), allow_overwriting_input=True)
     for page in pdf.pages:
         wm_stream = (
-            b"\nq 0.7 0.7 0.7 rg\n"
-            b"BT /Helv 36 Tf 1 0 0 1 150 500 Tm (COMPOUND VECTOR) Tj ET\n"
-            b"Q\n"
+            b"\nq 0.7 0.7 0.7 rg\nBT /Helv 36 Tf 1 0 0 1 150 500 Tm (COMPOUND VECTOR) Tj ET\nQ\n"
         )
         orig = _get_page_content_bytes(page)
         page.Contents = pdf.make_stream(orig + wm_stream)
@@ -927,7 +958,13 @@ def gen_fx_g19_opaque(out_dir: Path) -> Tuple[Path, Path, Dict]:
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w).copy()
 
         # Draw completely opaque pitch-black rectangle covering body text lines
-        cv2.rectangle(img, (int(pix.w * 0.15), int(pix.h * 0.20)), (int(pix.w * 0.85), int(pix.h * 0.35)), 0, -1)
+        cv2.rectangle(
+            img,
+            (int(pix.w * 0.15), int(pix.h * 0.20)),
+            (int(pix.w * 0.85), int(pix.h * 0.35)),
+            0,
+            -1,
+        )
 
         img_bytes = cv2.imencode(".png", img)[1].tobytes()
         out_page = out_doc.new_page(width=page.rect.width, height=page.rect.height)
@@ -944,6 +981,7 @@ def gen_fx_g19_opaque(out_dir: Path) -> Tuple[Path, Path, Dict]:
 # Modifiers: M01–M06 (Geometry & Document-State Modifiers)
 # ---------------------------------------------------------------------------
 
+
 def gen_fx_m01_inc_rev(out_dir: Path) -> Tuple[Path, Path, Dict]:
     """FX_M01: Incremental revision containing watermark added to clean base."""
     clean = out_dir / "clean_m01.pdf"
@@ -952,6 +990,7 @@ def gen_fx_m01_inc_rev(out_dir: Path) -> Tuple[Path, Path, Dict]:
 
     # Copy clean to wm first
     import shutil
+
     shutil.copyfile(clean, wm)
 
     # Open and add annotation with incremental update using PyMuPDF
@@ -959,7 +998,7 @@ def gen_fx_m01_inc_rev(out_dir: Path) -> Tuple[Path, Path, Dict]:
     annot = doc[0].add_stamp_annot(pymupdf.Rect(100, 200, 500, 600))
     annot.set_name("Draft")
     annot.update()
-    doc.save(doc.name, incremental=True, encryption=pymupdf.PDF_ENCRYPT_KEEP)
+    doc.save(doc.name, incremental=True, encryption=getattr(pymupdf, "PDF_ENCRYPT_KEEP", 0))
     doc.close()
 
     mask = {0: {"type": "inc_rev"}}

@@ -122,7 +122,13 @@ def test_vector_triggers():
 
     # Page with rotated text candidate
     rot_text = TextCandidate(
-        sig="t1", norm_str="CONFIDENTIAL", rot_deg=45.0, bb=[100, 100, 400, 400], font="/F1", size=36.0, color=[0.5]
+        sig="t1",
+        norm_str="CONFIDENTIAL",
+        rot_deg=45.0,
+        bb=[100, 100, 400, 400],
+        font="/F1",
+        size=36.0,
+        color=[0.5],
     )
     rec_text = _make_dummy_record(2, kind=PageKind.VECTOR, text_cands=[rot_text])
     plan_t = gatekeeper.plan_page(rec_text, subdoc_id=0, subdoc_records=[rec_text])

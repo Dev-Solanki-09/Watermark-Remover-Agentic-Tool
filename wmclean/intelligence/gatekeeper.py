@@ -138,7 +138,11 @@ class Gatekeeper:
         # -------------------------------------------------------------------
         # 1. Vector AST Triggers (Gate 2/3)
         # -------------------------------------------------------------------
-        if CarrierFlag.ANNOT_WM in carrier_set or CarrierFlag.ANNOT_STAMP in carrier_set or record.annots:
+        if (
+            CarrierFlag.ANNOT_WM in carrier_set
+            or CarrierFlag.ANNOT_STAMP in carrier_set
+            or record.annots
+        ):
             tasks.append(MethodTask(method=RemoverMethod.ANNOT_DEL, confidence=0.99))
 
         if CarrierFlag.OCG in carrier_set or record.ocgs:
@@ -169,7 +173,14 @@ class Gatekeeper:
         if CarrierFlag.PATTERN in carrier_set or CarrierFlag.SHADING in carrier_set:
             tasks.append(MethodTask(method=RemoverMethod.PATTERN_SH_STRIP, confidence=0.90))
 
-        if CarrierFlag.VEC_PATH in carrier_set or record.path_cand:
+        has_wm_paths = any(
+            getattr(pc, "is_light", False)
+            or (pc.ca is not None and pc.ca < 0.85)
+            or pc.is_clip
+            or (pc.doc_freq >= 0.70)
+            for pc in record.path_cand
+        )
+        if CarrierFlag.VEC_PATH in carrier_set or has_wm_paths:
             tasks.append(MethodTask(method=RemoverMethod.VEC_SPATIAL_BAND_CLUSTER, confidence=0.90))
             tasks.append(MethodTask(method=RemoverMethod.VEC_PATH_STRIP, confidence=0.88))
 
@@ -178,21 +189,28 @@ class Gatekeeper:
         # -------------------------------------------------------------------
         ras = record.ras_stats
         if ras and ras.has_raster:
-            # Analyze cluster-wide context
+            # Analyze cluster-wide context with relaxed recall thresholds
             cluster_has_template = any(
-                (r.ras_stats and r.ras_stats.tmpl_ncc >= 0.35) for r in subdoc_records
+                (
+                    r.ras_stats
+                    and r.ras_stats.tmpl_ncc >= 0.35
+                    and (r.ras_stats.tmpl_cov >= 0.002 or r.ras_stats.tmpl_cov == 0.0)
+                )
+                for r in subdoc_records
             )
             cluster_has_chroma = any(
-                (r.ras_stats and r.ras_stats.sat_p95 >= 15.0) for r in subdoc_records
+                (r.ras_stats and r.ras_stats.sat_p95 >= 10.0) for r in subdoc_records
             )
 
             # Check Margin Banner Trigger (top/bottom margins, e.g. scanner text)
-            if (CarrierFlag.RASTER_BAKED in carrier_set and ras.ocr_spans > 0) or any(
-                (x.bb and (x.bb[1] < 50 or x.bb[3] > h_pt - 50)) for x in record.xobj_cand
-            ):
+            has_margin_banner = (ras.ocr_spans > 0) or any(
+                (x.bb and (x.bb[3] - x.bb[1] < 120) and (x.bb[1] < 60 or x.bb[3] > h_pt - 60))
+                for x in record.xobj_cand
+            )
+            if has_margin_banner:
                 roi_margin = (
-                    int(w_px * 0.45),
-                    int(h_px * 0.90),
+                    int(w_px * 0.40),
+                    int(h_px * 0.88),
                     int(w_px * 0.995),
                     int(h_px * 0.995),
                 )
@@ -205,14 +223,20 @@ class Gatekeeper:
                 )
 
             # Check Hue-Selective Chroma Trigger
-            # Trigger: sat_p95 >= 15 with dominant watermark chroma band
-            # Per-Page Veto: page is achromatic (sat_p95 < 12)
-            if ras.sat_p95 >= 15.0:
+            # Trigger: sat_p95 >= 10.0 or cluster chroma >= 10.0 with page sat_p95 >= 6.0
+            if ras.sat_p95 >= 10.0 or (cluster_has_chroma and ras.sat_p95 >= 6.0):
                 roi_chroma = (
                     int(w_px * 0.05),
                     int(h_px * 0.10),
                     int(w_px * 0.95),
                     int(h_px * 0.90),
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.POINTWISE_HUE_AND_LUT,
+                        roi_bbox=roi_chroma,
+                        confidence=0.92,
+                    )
                 )
                 tasks.append(
                     MethodTask(
@@ -224,19 +248,53 @@ class Gatekeeper:
 
             # Check Bitonal Despeckle Trigger
             if ras.is_bitonal or CarrierFlag.RASTER_BITONAL in carrier_set:
-                tasks.append(MethodTask(method=RemoverMethod.RASTER_BITONAL_DESPECKLE, confidence=0.90))
+                tasks.append(
+                    MethodTask(method=RemoverMethod.RASTER_BITONAL_DESPECKLE, confidence=0.90)
+                )
+
+            # Check Piracy OCR Spotter Trigger (handles, stamps, watermark badges)
+            if (CarrierFlag.RASTER_BAKED in carrier_set and ras.ocr_spans > 0) or has_margin_banner:
+                tasks.append(MethodTask(method=RemoverMethod.PIRACY_OCR_SPOTTER, confidence=0.85))
 
             # Check Template Watermark (e.g. diagonal watermark or repeating stamp)
             # Gate 2 Negative Presence Veto:
-            # If the cluster has a template watermark (>= 0.35), but page p correlates poorly (< 0.35),
-            # page p is an outlier clean page -> VETO!
+            # Trigger when cluster has template watermark and page correlates
             if cluster_has_template:
-                if ras.tmpl_ncc >= 0.35:
+                if ras.tmpl_ncc >= 0.35 and (ras.tmpl_cov >= 0.002 or ras.tmpl_cov == 0.0):
                     roi_diag = (
                         int(w_px * 0.05),
                         int(h_px * 0.05),
                         int(w_px * 0.95),
                         int(h_px * 0.95),
+                    )
+                    # Zero-smudge density subtraction first
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.BILINGUAL_TWIN_CLONE,
+                            roi_bbox=roi_diag,
+                            confidence=0.95,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.DENSITY_SUB,
+                            roi_bbox=roi_diag,
+                            confidence=0.93,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.MAXTREE_FILTER,
+                            roi_bbox=roi_diag,
+                            confidence=0.90,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.SKELETON_GRAPH,
+                            roi_bbox=roi_diag,
+                            confidence=0.89,
+                        )
                     )
                     tasks.append(
                         MethodTask(
@@ -252,16 +310,45 @@ class Gatekeeper:
                             confidence=0.85,
                         )
                     )
-                # Else: tmpl_ncc < 0.35 -> VETOED! Do not add template removers!
-            elif CarrierFlag.RASTER_BAKED in carrier_set and not ras.is_bitonal and not cluster_has_chroma:
-                # Document has baked raster carrier but no cross-page template was established
-                # (e.g. short 1-2 page document like FX_G19).
-                # Schedule template whiten / alpha inv so L4 verifier can evaluate residual or detect opaque occlusions.
+            elif (
+                len(subdoc_records) <= 2
+                and CarrierFlag.RASTER_BAKED in carrier_set
+                and not ras.is_bitonal
+                and (ras.tmpl_ncc >= 0.35 or ras.est_alpha > 0.10 or ras.ocr_spans > 0)
+            ):
                 roi_full = (
                     int(w_px * 0.05),
                     int(h_px * 0.05),
                     int(w_px * 0.95),
                     int(h_px * 0.95),
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.BILINGUAL_TWIN_CLONE,
+                        roi_bbox=roi_full,
+                        confidence=0.95,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.POINTWISE_HUE_AND_LUT,
+                        roi_bbox=roi_full,
+                        confidence=0.90,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.DENSITY_SUB,
+                        roi_bbox=roi_full,
+                        confidence=0.89,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.MAXTREE_FILTER,
+                        roi_bbox=roi_full,
+                        confidence=0.88,
+                    )
                 )
                 tasks.append(
                     MethodTask(

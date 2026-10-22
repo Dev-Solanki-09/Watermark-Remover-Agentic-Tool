@@ -1,12 +1,12 @@
 """Sub-Page Pixel Firewall — ensures no L3 remover ever touches pixels outside assigned ROI.
 
-Guarantees 100% byte-identity for all pixels outside roi_bbox = (x1, y1, x2, y2).
+Enforces 100% byte-identity for all pixels outside roi_bbox = (x1, y1, x2, y2).
 """
 
 from __future__ import annotations
 
 import contextlib
-from typing import Callable, Iterator, Optional, Tuple
+from typing import Callable, Generator, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -20,10 +20,10 @@ def clamp_roi_bbox(
 ) -> Tuple[int, int, int, int]:
     """Pad and clamp (x1, y1, x2, y2) to image dimensions."""
     x1, y1, x2, y2 = roi_bbox
-    x1_clamped = max(0, min(width - 1, int(x1) - pad))
-    y1_clamped = max(0, min(height - 1, int(y1) - pad))
-    x2_clamped = max(x1_clamped + 1, min(width, int(x2) + pad))
-    y2_clamped = max(y1_clamped + 1, min(height, int(y2) + pad))
+    x1_clamped = max(0, min(width - 1, x1 - pad))
+    y1_clamped = max(0, min(height - 1, y1 - pad))
+    x2_clamped = max(x1_clamped + 1, min(width, x2 + pad))
+    y2_clamped = max(y1_clamped + 1, min(height, y2 + pad))
     return x1_clamped, y1_clamped, x2_clamped, y2_clamped
 
 
@@ -70,10 +70,10 @@ def roi_lock(
     page_img: np.ndarray,
     roi_bbox: Optional[Tuple[int, int, int, int]],
     pad: int = 6,
-) -> Iterator[np.ndarray]:
+) -> Generator[np.ndarray, None, None]:
     """Context manager yielding cropped view and updating page_img in-place safely.
 
-    On exit, asserts or guarantees pixels outside roi_bbox are completely unaffected.
+    On exit, asserts or verifies pixels outside roi_bbox are completely unaffected.
     """
     if roi_bbox is None:
         yield page_img

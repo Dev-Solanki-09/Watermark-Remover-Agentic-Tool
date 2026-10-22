@@ -69,7 +69,7 @@ def compute_fg_protection_mask(
 
                 # Intersect with absolute darkness threshold to reject faint watermark tints
                 fg_bool = (bin_img == 0) & (gray <= max_fg_luminance)
-                return (fg_bool.astype(np.uint8) * 255)
+                return fg_bool.astype(np.uint8) * 255
         except Exception as e:
             logger.debug("doxapy binarization failed, falling back to OpenCV: %s", e)
 
@@ -84,7 +84,38 @@ def compute_fg_protection_mask(
         C=5,
     )
     fg_bool = (adapt > 0) & (gray <= max_fg_luminance)
-    return (fg_bool.astype(np.uint8) * 255)
+    return fg_bool.astype(np.uint8) * 255
+
+
+def apply_text_core_lock(
+    cleaned_img: np.ndarray,
+    orig_img: np.ndarray,
+    text_lock_mask: Optional[np.ndarray],
+) -> np.ndarray:
+    """Enforce self-healing Text-Core Lock: cleaned_img[M_text] = min(cleaned_img[M_text], orig_img[M_text]).
+
+    Ensures mathematically that protected foreground text, formulas, and math symbols
+    are never lightened, thinned, or erased by any raster cleaning stage.
+    """
+    if text_lock_mask is None:
+        return cleaned_img.copy()
+    mask_bool = text_lock_mask > 0 if text_lock_mask.dtype != bool else text_lock_mask
+    if not mask_bool.any():
+        return cleaned_img.copy()
+
+    result = cleaned_img.copy()
+    if result.ndim == 3 and orig_img.ndim == 3:
+        for c in range(result.shape[2]):
+            result[mask_bool, c] = np.minimum(result[mask_bool, c], orig_img[mask_bool, c])
+    elif result.ndim == 2 and orig_img.ndim == 2:
+        result[mask_bool] = np.minimum(result[mask_bool], orig_img[mask_bool])
+    elif result.ndim == 3 and orig_img.ndim == 2:
+        for c in range(result.shape[2]):
+            result[mask_bool, c] = np.minimum(result[mask_bool, c], orig_img[mask_bool])
+    elif result.ndim == 2 and orig_img.ndim == 3:
+        orig_gray = _to_gray(orig_img)
+        result[mask_bool] = np.minimum(result[mask_bool], orig_gray[mask_bool])
+    return result
 
 
 def measure_stroke_recall_loss(
@@ -92,11 +123,13 @@ def measure_stroke_recall_loss(
     clean_img: np.ndarray,
     fg_mask: Optional[np.ndarray] = None,
     erased_thresh: int = 200,
+    wm_mask: Optional[np.ndarray] = None,
 ) -> float:
     """Measure exact foreground stroke recall loss (L_fg) in < 5 ms.
 
     L_fg is the fraction of protected foreground pixels that were mistakenly
-    whitened (erased) in clean_img.
+    whitened (erased) in clean_img. Excludes confirmed watermark pixels (wm_mask)
+    so erased dark watermark ink is not misclassified as lost foreground body text.
 
     Invariant: L_fg <= 0.020 (foreground stroke recall loss < 2.0%).
 
@@ -110,6 +143,10 @@ def measure_stroke_recall_loss(
         fg_mask = compute_fg_protection_mask(orig_gray)
 
     fg_pixels = fg_mask > 0
+    if wm_mask is not None:
+        wm_bool = wm_mask > 0 if wm_mask.dtype != bool else wm_mask
+        fg_pixels = fg_pixels & (~wm_bool)
+
     total_fg = int(np.sum(fg_pixels))
     if total_fg < 30:
         return 0.0

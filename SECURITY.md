@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.0.x (alpha) | :white_check_mark: |
-| < 0.0.2 | :x:                |
+| 0.0.1-beta (0.0.1b0) | :white_check_mark: |
+| < 0.0.1b0            | :x:                |
 
 ---
 

@@ -3,6 +3,7 @@
 Exit codes:
   0  All pages CLEAN_EXACT or CLEAN_VERIFIED or UNTOUCHED
   10 Partial completion; ≥1 page FLAGGED
+  15 Unverified completion; ≥1 page UNVERIFIED
   20 Unsupported or password-locked encrypted document
   30 Corrupt/unrecoverable PDF input
   40 CLI usage, I/O, or disk-space error
@@ -118,6 +119,11 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- schema ---
     sub.add_parser("schema", help="Output JSON tool-call schema for agents")
 
+    # --- bench ---
+    bench_p = sub.add_parser("bench", help="Run benchmark suite against reference baselines")
+    bench_p.add_argument("--full", action="store_true", help="Run full 12-case matrix")
+    bench_p.add_argument("--output", default="BENCHMARKS.md", help="Path to write Markdown summary")
+
     return parser
 
 
@@ -171,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_doctor(args)
         elif args.command == "schema":
             return _cmd_schema(args)
+        elif args.command == "bench":
+            return _cmd_bench(args)
         else:
             parser.print_help()
             return 40
@@ -501,6 +509,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         f"[PASS] SOTA extensions active: {', '.join(sota_status) if sota_status else 'none'}"
     )
 
+    # Optional remover availability breakdown
+    passes.append("[INFO] Optional remover capabilities:")
+    passes.append(
+        f"  - Closed-form alpha matting (raster_alpha_matting): {'AVAILABLE (pymatting)' if has_pymatting() else 'UNAVAILABLE (pip install pymatting)'}"
+    )
+    passes.append(
+        f"  - Fast C++ SIMD Sauvola core-lock (doxapy): {'AVAILABLE' if has_doxapy() else 'FALLBACK (scikit-image threshold_sauvola)'}"
+    )
+    passes.append(
+        f"  - RapidOCR watermark spotting: {'AVAILABLE' if has_rapidocr() else 'FALLBACK (geometric regex spotter)'}"
+    )
+    passes.append(
+        f"  - Skan topological skeleton graph: {'AVAILABLE' if has_skan() else 'FALLBACK (morphological skeleton)'}"
+    )
+
     # 3. Temp directory write permissions
     try:
         with tempfile.NamedTemporaryFile(delete=True) as tf:
@@ -587,6 +610,19 @@ def _cmd_schema(args: argparse.Namespace) -> int:
         },
     }
     print(json.dumps(schema, indent=2))
+    return 0
+
+
+def _cmd_bench(args: argparse.Namespace) -> int:
+    """Run benchmark evaluation suite comparing wmclean against baselines."""
+    root_dir = str(Path(__file__).resolve().parent.parent)
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+
+    from tests.benchmarks.run_benchmark import run_benchmark_suite
+
+    out_p = Path(args.output) if args.output else None
+    run_benchmark_suite(quick=not args.full, output_md=out_p)
     return 0
 
 

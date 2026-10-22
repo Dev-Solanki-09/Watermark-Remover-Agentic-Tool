@@ -312,3 +312,47 @@ def _export_crop_preview(
     img = Image.fromarray(preview_arr)
     img.save(str(out_p), format="PNG", optimize=True)
     logger.info("Saved compact side-by-side preview crop to %s", output_crop_path)
+
+
+def generate_diagnostic_diff_crop(
+    orig_img: np.ndarray,
+    cleaned_img: np.ndarray,
+    output_path: str,
+    max_dim: int = 640,
+) -> str:
+    """Generate side-by-side [Before | Diff | After] PNG diff crop for FLAGGED or UNVERIFIED pages.
+
+    Args:
+        orig_img: Original uncleaned image array (H, W, 3) or (H, W).
+        cleaned_img: Attempted cleaned image array.
+        output_path: Destination path for the diff crop.
+        max_dim: Maximum width/height of the composite image.
+
+    Returns:
+        Absolute string path to the saved diff crop.
+    """
+    orig_rgb = orig_img if orig_img.ndim == 3 else cv2.cvtColor(orig_img, cv2.COLOR_GRAY2BGR)
+    clean_rgb = cleaned_img if cleaned_img.ndim == 3 else cv2.cvtColor(cleaned_img, cv2.COLOR_GRAY2BGR)
+
+    h, w = orig_rgb.shape[:2]
+    g_orig = cv2.cvtColor(orig_rgb, cv2.COLOR_BGR2GRAY)
+    g_clean = cv2.cvtColor(clean_rgb, cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(g_orig, g_clean)
+
+    # Amplify difference for visual clarity
+    diff_vis = cv2.applyColorMap(np.clip(diff.astype(int) * 3, 0, 255).astype(np.uint8), cv2.COLORMAP_MAGMA)
+
+    divider = np.zeros((h, 2, 3), dtype=np.uint8)
+    comp = np.hstack([orig_rgb, divider, diff_vis, divider, clean_rgb])
+
+    ch, cw = comp.shape[:2]
+    if max(ch, cw) > max_dim:
+        scale = max_dim / float(max(ch, cw))
+        comp = cv2.resize(comp, (int(cw * scale), int(ch * scale)), interpolation=cv2.INTER_AREA)
+
+    out_p = Path(output_path).resolve()
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_p), comp)
+    logger.info("Saved diagnostic diff crop for inspection: %s", out_p)
+    return str(out_p)
+

@@ -69,6 +69,7 @@ credentials/
 
 # Sensitive & Personal Documents, Test PDFs & Diagnostic Artifacts
 Documents/
+docs/
 documents/
 tmp_diag/
 diag/
@@ -115,3 +116,4 @@ project-plan-and-implementation.md
 *.notes.md
 *.prompt.md
 notes/
+criticism.md

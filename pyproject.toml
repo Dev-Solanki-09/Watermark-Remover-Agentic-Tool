@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watermark-remover-auto-agent-tool"
-version = "0.0.1b0"
-description = "Deterministic CPU-only PDF forensic engine and agent-native surgical actuator"
+version = "0.0.2b0"
+description = "Local CPU-focused PDF forensic engine and agent-native surgical actuator"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -39,6 +39,8 @@ dependencies = [
     "fonttools>=4.67.0",
     "sknw>=0.15",
     "skan>=0.13.1",
+    "psutil>=5.9.0",
+    "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +54,7 @@ dev = [
 
 [project.scripts]
 wmclean = "wmclean.cli:main"
+wmclean-mcp = "wmclean.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["wmclean*"]

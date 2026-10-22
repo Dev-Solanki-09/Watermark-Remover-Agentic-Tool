@@ -267,54 +267,60 @@ class Gatekeeper:
                         int(w_px * 0.95),
                         int(h_px * 0.95),
                     )
-                    # Zero-smudge density subtraction first
+                    # Tier 1 Two-Regime Fill first (cleanest, fastest, deterministic)
                     tasks.append(
                         MethodTask(
-                            method=RemoverMethod.BILINGUAL_TWIN_CLONE,
+                            method=RemoverMethod.TWO_REGIME_FILL,
                             roi_bbox=roi_diag,
-                            confidence=0.95,
-                        )
-                    )
-                    tasks.append(
-                        MethodTask(
-                            method=RemoverMethod.DENSITY_SUB,
-                            roi_bbox=roi_diag,
-                            confidence=0.93,
-                        )
-                    )
-                    tasks.append(
-                        MethodTask(
-                            method=RemoverMethod.MAXTREE_FILTER,
-                            roi_bbox=roi_diag,
-                            confidence=0.90,
-                        )
-                    )
-                    tasks.append(
-                        MethodTask(
-                            method=RemoverMethod.SKELETON_GRAPH,
-                            roi_bbox=roi_diag,
-                            confidence=0.89,
+                            confidence=0.98,
                         )
                     )
                     tasks.append(
                         MethodTask(
                             method=RemoverMethod.RASTER_TEMPLATE_WHITEN,
                             roi_bbox=roi_diag,
-                            confidence=0.88,
+                            confidence=0.92,
                         )
                     )
                     tasks.append(
                         MethodTask(
                             method=RemoverMethod.RASTER_ALPHA_INV,
                             roi_bbox=roi_diag,
-                            confidence=0.85,
+                            confidence=0.90,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.BILINGUAL_TWIN_CLONE,
+                            roi_bbox=roi_diag,
+                            confidence=0.88,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.DENSITY_SUB,
+                            roi_bbox=roi_diag,
+                            confidence=0.86,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.MAXTREE_FILTER,
+                            roi_bbox=roi_diag,
+                            confidence=0.84,
+                        )
+                    )
+                    tasks.append(
+                        MethodTask(
+                            method=RemoverMethod.SKELETON_GRAPH,
+                            roi_bbox=roi_diag,
+                            confidence=0.82,
                         )
                     )
             elif (
                 len(subdoc_records) <= 2
                 and CarrierFlag.RASTER_BAKED in carrier_set
                 and not ras.is_bitonal
-                and (ras.tmpl_ncc >= 0.35 or ras.est_alpha > 0.10 or ras.ocr_spans > 0)
             ):
                 roi_full = (
                     int(w_px * 0.05),
@@ -322,46 +328,54 @@ class Gatekeeper:
                     int(w_px * 0.95),
                     int(h_px * 0.95),
                 )
+                # Tier 1 Two-Regime Fill first (cleanest, fastest, deterministic)
                 tasks.append(
                     MethodTask(
-                        method=RemoverMethod.BILINGUAL_TWIN_CLONE,
+                        method=RemoverMethod.TWO_REGIME_FILL,
                         roi_bbox=roi_full,
-                        confidence=0.95,
-                    )
-                )
-                tasks.append(
-                    MethodTask(
-                        method=RemoverMethod.POINTWISE_HUE_AND_LUT,
-                        roi_bbox=roi_full,
-                        confidence=0.90,
-                    )
-                )
-                tasks.append(
-                    MethodTask(
-                        method=RemoverMethod.DENSITY_SUB,
-                        roi_bbox=roi_full,
-                        confidence=0.89,
-                    )
-                )
-                tasks.append(
-                    MethodTask(
-                        method=RemoverMethod.MAXTREE_FILTER,
-                        roi_bbox=roi_full,
-                        confidence=0.88,
+                        confidence=0.98,
                     )
                 )
                 tasks.append(
                     MethodTask(
                         method=RemoverMethod.RASTER_TEMPLATE_WHITEN,
                         roi_bbox=roi_full,
-                        confidence=0.85,
+                        confidence=0.92,
                     )
                 )
                 tasks.append(
                     MethodTask(
                         method=RemoverMethod.RASTER_ALPHA_INV,
                         roi_bbox=roi_full,
-                        confidence=0.85,
+                        confidence=0.90,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.POINTWISE_HUE_AND_LUT,
+                        roi_bbox=roi_full,
+                        confidence=0.88,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.DENSITY_SUB,
+                        roi_bbox=roi_full,
+                        confidence=0.86,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.BILINGUAL_TWIN_CLONE,
+                        roi_bbox=roi_full,
+                        confidence=0.84,
+                    )
+                )
+                tasks.append(
+                    MethodTask(
+                        method=RemoverMethod.MAXTREE_FILTER,
+                        roi_bbox=roi_full,
+                        confidence=0.82,
                     )
                 )
 

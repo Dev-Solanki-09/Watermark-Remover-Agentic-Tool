@@ -69,7 +69,7 @@ def skeleton_graph(
             skan = get_skan()
             if skan is not None:
                 skeleton = skan.Skeleton(skel)
-                stats = skan.summarize(skeleton)
+                stats = skan.summarize(skeleton, separator="_")
                 n_branches = len(stats) if stats is not None else 0
 
                 if n_branches > 0 and n_branches <= 400:

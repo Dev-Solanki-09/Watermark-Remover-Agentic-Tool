@@ -1,0 +1,33 @@
+# Watermark-Remover-Agentic-Tool (Universal Forensic & MCP Watermark Removal Engine)
+
+> Fail-closed forensic watermark, stamp, seal, and background removal engine for PDFs, scans, and scientific diagrams. Automatically cascades between Tier 0 vector AST stripping, Tier 1 zero-smudge alpha unmixing with DocShield core-locking, Tier 2 topological skeleton stitching with exact Betti number loop preservation, and Tier 3 strictly clamped inpainting.
+
+Watermark-Remover-Agentic-Tool (`wmclean`) is an open-source, deterministic document restoration pipeline and Model Context Protocol (MCP) server. It cleans semi-transparent, opaque, and vector watermarks across native PDFs and document scans while strictly preserving fine text strokes, diacritics, and scientific diagram topology.
+
+## Core Capabilities
+- **Tier 0 Vector AST Surgery**: Bitwise lossless PDF object tree pruning for native vector watermarks, annotations, and OCG layers.
+- **Tier 1 Two-Regime Fill & Alpha Matting**: Background paper restoration on blank paper and linear alpha unmixing over text with DocShield core-locking.
+- **Tier 2 Topological Skeleton Stitching**: Betti number invariance verification (Δβ0=0, Δβ1=0) for chemical benzene rings, circuit diagrams, and mathematical symbols.
+- **Tier 3 Strictly Clamped Inpainting**: Telea and Fourier inpainting strictly confined within the dilated watermark mask with bitwise pixel invariance outside.
+- **Fail-Closed Verification**: Independent structural QA gate that exits with code 15 (UNVERIFIED) whenever residual watermark energy or content loss thresholds are breached.
+
+## Documentation
+- [Agent Contract & Execution](AGENTS.md): Fast-path execution commands, exit code contract, and code architecture jump table.
+- [Empirical Benchmarks](BENCHMARKS.md): Systematic benchmark evaluations on Devanagari script, benzene rings, and electronic schematics across 15% to 55% watermark opacities.
+- [MCP Registry Definition](server.json): Official Model Context Protocol schema and tool definitions.
+
+## MCP Tools
+- `remove_watermark_auto`: Fully automated multi-tier removal with independent fail-closed structural QA verification.
+- `inspect_watermark_layers`: Deep diagnostic inspection of PDF vector streams, OCG layers, and raster transparency.
+- `benchmark_page`: Objective per-page verification measuring residual energy, stroke loss, and topological loop continuity.
+
+## CLI Usage
+- `wmclean run <in.pdf> -o <out.pdf> --report <r.json>`: Single-file processing with JSON audit report.
+- `wmclean plan <in.pdf>`: Dry-run planning and layer diagnosis without modifying the document.
+- `wmclean batch <in_dir> -o <out_dir> --resume`: Resume-capable multi-document batch execution.
+- `wmclean doctor`: Environment and optional dependency healthcheck.
+
+## Optional Dependencies
+- `pymatting`: High-accuracy closed-form matting for continuous-tone photographic backgrounds.
+- `doxapy`: Sauvola and Wolf adaptive binarization for aged or degraded scans.
+- `rapidocr-onnxruntime`: Piracy text OCR spotter for detecting dynamic embedded text overlays.

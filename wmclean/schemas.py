@@ -34,6 +34,7 @@ class PageState(str, enum.Enum):
     CLEAN_VERIFIED = "CLEAN_VERIFIED"
     UNTOUCHED = "UNTOUCHED"
     FLAGGED = "FLAGGED"
+    UNVERIFIED = "UNVERIFIED"
 
 
 class CarrierFlag(str, enum.Enum):
@@ -74,6 +75,7 @@ class RemoverMethod(str, enum.Enum):
     REV_ROLLBACK = "rev_rollback"
     AST_TJ_REASSEMBLE = "ast_tj_reassemble"
     VEC_SPATIAL_BAND_CLUSTER = "vec_spatial_band_cluster"
+    TWO_REGIME_FILL = "two_regime_fill"
     RASTER_TEMPLATE_WHITEN = "raster_template_whiten"
     RASTER_ALPHA_INV = "raster_alpha_inv"
     RASTER_COLOR_UNMIX = "raster_color_unmix"
@@ -114,6 +116,7 @@ class FailureCode(str, enum.Enum):
     ERR_UNSUPPORTED_XFA = "ERR_UNSUPPORTED_XFA"
     ERR_CORRUPT_PDF = "ERR_CORRUPT_PDF"
     ERR_IO_RESOURCE = "ERR_IO_RESOURCE"
+    ERR_PAGE_UNVERIFIED = "ERR_PAGE_UNVERIFIED"
 
 
 class ExitCode(int, enum.Enum):
@@ -121,6 +124,7 @@ class ExitCode(int, enum.Enum):
 
     SUCCESS = 0
     PARTIAL = 10  # ≥1 page FLAGGED
+    UNVERIFIED = 15  # ≥1 page UNVERIFIED (failed independent verification)
     UNSUPPORTED = 20  # encrypted / XFA
     CORRUPT = 30
     IO_ERROR = 40
@@ -366,6 +370,7 @@ class PageReport(BaseModel):
     res: float = Field(default=0.0, description="Watermark residual")
     loss: float = Field(default=0.0, description="Content loss")
     ms: int = Field(default=0, description="Processing time in milliseconds")
+    crop: Optional[str] = Field(default=None, description="Diagnostic diff crop path if FLAGGED or UNVERIFIED")
 
 
 class ClusterReport(BaseModel):
@@ -396,6 +401,7 @@ class CountsReport(BaseModel):
     verified: int = 0
     untouched: int = 0
     flagged: int = 0
+    unverified: int = 0
 
 
 class DocumentReport(BaseModel):

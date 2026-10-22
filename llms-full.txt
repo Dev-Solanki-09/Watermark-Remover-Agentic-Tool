@@ -1,0 +1,109 @@
+# Watermark-Remover-Agentic-Tool (Universal Forensic & MCP Watermark Removal Engine) — Full Documentation
+
+> Fail-closed forensic watermark, stamp, seal, and background removal engine for PDFs, scans, and scientific diagrams. Automatically cascades between Tier 0 vector AST stripping, Tier 1 zero-smudge alpha unmixing with DocShield core-locking, Tier 2 topological skeleton stitching with exact Betti number loop preservation, and Tier 3 strictly clamped inpainting.
+
+## System Overview
+Watermark-Remover-Agentic-Tool (`wmclean`) solves watermark removal across heterogeneous documents: digital PDFs with vector overlays, high-resolution scans with semi-transparent tinted stamps, and technical documents containing delicate chemical structures, circuit schematics, and non-Latin scripts (Devanagari, Chinese, Cyrillic).
+
+Unlike naive inpainting models that hallucinate or blur adjacent text and destroy thin diagram lines, `wmclean` operates with a deterministic 4-tier restoration cascade and an independent fail-closed verification engine.
+
+---
+
+## The 4-Tier Progressive Restoration Cascade
+
+### Tier 0: Pure Vector AST Surgery (Bitwise Lossless)
+Operates directly on the PDF container object tree without rasterization.
+- Prunes `/Watermark` and `/Stamp` annotation dictionaries from `/Annots`.
+- Toggles Optional Content Group (OCG) visibility dictionaries in `/OCProperties`.
+- Strips Marked Content Artifact tags containing watermark identifiers.
+- Prunes repeated background Form XObjects matching cross-page document frequency thresholds.
+- Result: 100% bitwise identical text stream and vector paths outside the targeted objects.
+
+### Tier 1: Two-Regime Fill & Deterministic Linear Alpha Matting
+Operates on raster scans and hybrid pages with semi-transparent watermarks.
+- **Regime 1 (Blank Paper Fill)**: Identifies pixels with author mask $M_{\text{author}} = 0$ (paper regions). Replaces watermark pixels with the local background paper color, driving residual watermark energy to near zero ($E_{\text{res}} \le 0.03$).
+- **Regime 2 (Alpha Unmixing with DocShield Core-Locking)**: For pixels overlapping authentic ink or stroke halos, applies inverse linear alpha unmixing:
+  $$J = \frac{I - \alpha W}{1 - \alpha}$$
+  Authentic character cores are locked using morphological erosion masks, preventing ink thinning, diacritic erosion, and edge haloing.
+- **Diagram Lock**: Scientific diagrams detected by the DocShield segmenter (`shield.m_diagram`) are strictly protected from erosion.
+
+### Tier 2: Topological Skeleton Stitching with Exact Betti Invariance
+Operates on scientific diagrams, circuit schematics, and chemical structures.
+- **Betti Number Calculation**: Uses Euler characteristic $\chi = \beta_0 - \beta_1 \implies \beta_1 = \beta_0 - \chi$ via 8-connectivity component labeling and topological genus calculation.
+- **Topological Invariant Enforcement**: Requires $\Delta \beta_0 = 0$ (no disconnected fragments) and $\Delta \beta_1 = 0$ (no broken loops in aromatic benzene rings, op-amps, or circuit loops).
+- **Collinear Skeleton Stitching**: If a watermark eraser leaves a gap $\le 10$ pixels across a diagram stroke, skeleton endpoint pairing connects collinear dead ends to restore loop continuity.
+
+### Tier 3: Strictly Clamped Inpainting on Opaque Zones
+Operates on opaque stamps and solid copyright seals where the background cannot be analytically unmixed.
+- Inpainting (Navier-Stokes, Telea, or Fourier) is strictly confined to the dilated watermark mask $M_{\text{dilated}}$.
+- Hard invariant: 100% of pixels outside $M_{\text{dilated}}$ are bitwise identical to the input scan.
+
+---
+
+## Independent Fail-Closed Structural Verification Engine
+
+Every page processed through raster or hybrid tiers is subjected to an independent QA verification pass before acceptance:
+1. **Residual Watermark Energy Scan**: Evaluates whether residual contrast in the watermark region exceeds threshold bounds ($R > 0.05$).
+2. **Template Normalized Cross-Correlation (NCC)**: Compares the cleaned region against the document-wide watermark template. If correlation exceeds $0.40$, the watermark remains and verification fails.
+3. **Outside-Mask Difference Invariance**: Asserts that pixels outside the watermark mask remain identical to the original input ($D_{\text{outside}} = 0.0$).
+4. **Exit Code Contract**:
+   - `0`: CLEAN (CLEAN_EXACT, CLEAN_VERIFIED, or UNTOUCHED).
+   - `10`: PARTIAL (at least one FLAGGED page requiring human review).
+   - `15`: UNVERIFIED (watermark removal failed independent verification; output reverted or held for inspection).
+   - `20`: UNSUPPORTED (password-protected or encrypted PDF).
+   - `30`: CORRUPT (unrecoverable PDF syntax).
+   - `40`: IO / RESOURCE ERROR (disk, memory, or permissions issue).
+   - `50`: INTERNAL INVARIANT BREACH.
+
+---
+
+## Model Context Protocol (MCP) Interface
+
+`wmclean-mcp` exposes semantic tools for AI agents (Claude Code, Cursor, Windsurf):
+
+### Tool: `remove_watermark_auto`
+```json
+{
+  "name": "remove_watermark_auto",
+  "description": "Universal watermark, stamp, seal, and background overlay remover for PDFs, scanned documents, scientific diagrams, chemical structures, and photographs.",
+  "parameters": {
+    "file_path": {"type": "string", "description": "Absolute or relative path to the input PDF or image."},
+    "output_path": {"type": "string", "description": "Optional destination path for the cleaned PDF."},
+    "preserve_scientific_topology": {"type": "boolean", "default": true, "description": "Enforce Betti-number loop invariance (Δβ1=0) on chemical rings and circuit diagrams."}
+  }
+}
+```
+
+### Tool: `inspect_watermark_layers`
+```json
+{
+  "name": "inspect_watermark_layers",
+  "description": "Diagnoses whether a watermark is a removable vector PDF layer, a semi-transparent alpha blend, or an opaque raster stamp across document pages.",
+  "parameters": {
+    "file_path": {"type": "string", "description": "Path to the input PDF or document image."}
+  }
+}
+```
+
+### Tool: `benchmark_page`
+```json
+{
+  "name": "benchmark_page",
+  "description": "Runs objective forensic verification benchmarks on a specific page, measuring residual watermark energy, authentic stroke retention, outside-mask invariance, and topological loop continuity.",
+  "parameters": {
+    "file_path": {"type": "string", "description": "Path to the PDF document."},
+    "page_number": {"type": "integer", "default": 1, "description": "1-indexed page number to benchmark."}
+  }
+}
+```
+
+---
+
+## Command Line Interface (CLI)
+- `wmclean run <in.pdf> -o <out.pdf> --report <r.json>`
+- `wmclean plan <in.pdf> [--json <p.json>]`
+- `wmclean batch <in_dir> -o <out_dir> --report <r.json> --resume`
+- `wmclean peek <in.pdf> -p <page> [-o <crop.png>]`
+- `wmclean steer <in.pdf> -s <dsl> [-o <out.pdf>]`
+- `wmclean doctor`
+- `wmclean schema`

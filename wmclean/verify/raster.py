@@ -90,6 +90,13 @@ def verify_raster(
             wm_mask = wm_mask | (np.abs(bg_t - t_grey.astype(np.float32)) > 15)
 
     outside_mask = ~wm_mask if wm_mask is not None else np.ones_like(orig_grey, dtype=bool)
+    from wmclean.intelligence.doc_shield import parse_doc_shield
+
+    shield = parse_doc_shield(
+        orig_img if orig_img is not None else orig_grey, template_mask=wm_mask
+    )
+    if wm_mask is not None:
+        outside_mask = outside_mask & (~shield.m_diagram) & (~shield.m_core)
 
     # 2. Foreground Content Loss (L_fg)
     # Check for corrupt/blank output image
@@ -113,6 +120,10 @@ def verify_raster(
     else:
         eval_fg = orig_fg
 
+    # Prevent circularity: authentic text cores and diagrams from DocShield
+    # are always evaluated for content loss, even if touched by the remover
+    eval_fg = eval_fg | shield.m_core | shield.m_diagram
+
     total_eval_fg = int(np.sum(eval_fg))
 
     content_loss = 0.0
@@ -131,51 +142,87 @@ def verify_raster(
                 reason=f"Foreground content loss exceeded ({content_loss:.4f} > {_MAX_CONTENT_LOSS:.4f})",
             )
 
-    # 3. Watermark Residual (R_wm)
+    # 3. Watermark Residual (R_wm) over full page background
+    bg_orig = float(np.percentile(orig_grey, 95))
+    bg_clean = float(np.percentile(clean_grey, 95))
+
+    # Candidate watermark pixels from original: pixels darker than paper background
+    # strictly outside authentic author text cores, diagram strokes, and ink halos
+    m_author = shield.m_diagram | shield.m_ink_halo_shield | shield.m_core | orig_fg
+    cand_wm = (~m_author) & (orig_grey < (bg_orig - 12))
+
+    if wm_mask is not None:
+        eval_mask = (wm_mask & (~m_author)) | cand_wm
+    else:
+        eval_mask = cand_wm
+
     residual = 0.0
-    if wm_mask is not None and np.sum(wm_mask) > 100:
-        bg_val = float(np.percentile(clean_grey, 95))
-        # Protect author diagrams, text cores, and halos from being evaluated as residual watermark
-        from wmclean.intelligence.doc_shield import parse_doc_shield
+    if np.sum(eval_mask) > 100:
+        wm_region = clean_grey[eval_mask].astype(np.float32)
+        residual = float(np.mean(np.abs(wm_region - bg_clean))) / 255.0
 
-        shield = parse_doc_shield(
-            orig_img if orig_img is not None else orig_grey, template_mask=wm_mask
+    if residual > _MAX_RESIDUAL:
+        logger.warning("verify_raster failed: R_wm=%.4f > %.4f", residual, _MAX_RESIDUAL)
+        return VerifyResult(
+            passed=False,
+            residual=round(residual, 4),
+            content_loss=round(content_loss, 4),
+            failure_code=FailureCode.ERR_HIGH_RESIDUAL,
+            reason=f"Watermark residual energy exceeded ({residual:.4f} > {_MAX_RESIDUAL:.4f})",
         )
-        bg_eval_mask = (
-            wm_mask & (~shield.m_diagram) & (~shield.m_ink_halo_shield) & (orig_grey >= 120)
-        )
-        if np.sum(bg_eval_mask) > 50:
-            wm_region = clean_grey[bg_eval_mask].astype(np.float32)
-            residual = float(np.mean(np.abs(wm_region - bg_val))) / 255.0
-        else:
-            clean_eval = wm_mask & (~shield.m_diagram) & (~shield.m_ink_halo_shield)
-            if np.sum(clean_eval) > 50:
-                wm_region = clean_grey[clean_eval].astype(np.float32)
-                residual = float(np.mean(np.abs(wm_region - bg_val))) / 255.0
-            else:
-                residual = 0.0
 
-        if residual > _MAX_RESIDUAL:
-            logger.warning("verify_raster failed: R_wm=%.4f > %.4f", residual, _MAX_RESIDUAL)
-            return VerifyResult(
-                passed=False,
-                residual=round(residual, 4),
-                content_loss=round(content_loss, 4),
-                failure_code=FailureCode.ERR_HIGH_RESIDUAL,
-                reason=f"Watermark residual energy exceeded ({residual:.4f} > {_MAX_RESIDUAL:.4f})",
-            )
-
-    # 4. Outside Mask Maximum Pixel Difference
-    outside_diff = 0.0
-    if wm_mask is not None and outside_mask.any():
-        outside_diff = float(
-            np.max(
-                np.abs(
-                    orig_grey[outside_mask].astype(np.int16)
-                    - clean_grey[outside_mask].astype(np.int16)
+    # 4. Detector Check: Template normalized correlation
+    if template is not None:
+        t_grey = _to_grey(template)
+        if t_grey.shape != clean_grey.shape:
+            t_grey = cv2.resize(t_grey, (clean_grey.shape[1], clean_grey.shape[0]))
+        bg_t = float(np.percentile(t_grey, 95))
+        t_diff = np.maximum(0.0, bg_t - t_grey.astype(np.float32))
+        t_norm_energy = np.sqrt(np.sum(t_diff**2))
+        if t_norm_energy > 50.0:
+            clean_diff = np.maximum(0.0, bg_clean - clean_grey.astype(np.float32))
+            clean_diff[m_author] = 0.0
+            sub_t = t_diff > 10
+            c_norm_energy = np.sqrt(np.sum(clean_diff[sub_t] ** 2))
+            if c_norm_energy > 50.0:
+                corr = float(
+                    np.sum(t_diff[sub_t] * clean_diff[sub_t])
+                    / (np.sqrt(np.sum(t_diff[sub_t] ** 2)) * c_norm_energy)
                 )
-            )
+                if corr > 0.40:
+                    logger.warning(
+                        "verify_raster failed: detector template correlation=%.3f > 0.40", corr
+                    )
+                    return VerifyResult(
+                        passed=False,
+                        residual=round(max(residual, corr * 0.08), 4),
+                        content_loss=round(content_loss, 4),
+                        failure_code=FailureCode.ERR_HIGH_RESIDUAL,
+                        reason=f"Watermark template correlation exceeded ({corr:.3f} > 0.40)",
+                    )
+
+    # 5. Outside Mask Maximum Pixel Difference
+    # Pixels outside the watermark mask must remain unaltered.
+    if wm_mask is not None:
+        wm_bool = wm_mask > 0 if wm_mask.dtype != bool else wm_mask
+        outside_mask = ~wm_bool
+    elif template is not None:
+        t_grey = _to_grey(template)
+        if t_grey.shape != clean_grey.shape:
+            t_grey = cv2.resize(t_grey, (clean_grey.shape[1], clean_grey.shape[0]))
+        bg_t = float(np.percentile(t_grey, 95))
+        t_mask = np.abs(bg_t - t_grey.astype(np.float32)) > 15
+        outside_mask = ~t_mask
+    else:
+        outside_mask = None
+
+    outside_diff = 0.0
+    if outside_mask is not None and outside_mask.any():
+        diff_arr = np.abs(
+            orig_grey[outside_mask].astype(np.int16)
+            - clean_grey[outside_mask].astype(np.int16)
         )
+        outside_diff = float(np.max(diff_arr)) if diff_arr.size > 0 else 0.0
         if outside_diff > _MAX_OUTSIDE_DIFF:
             logger.warning(
                 "verify_raster failed: outside_diff=%.1f > %.1f", outside_diff, _MAX_OUTSIDE_DIFF

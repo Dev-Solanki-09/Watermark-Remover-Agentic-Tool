@@ -10,9 +10,10 @@ If your task is to remove watermarks from PDF(s), DO NOT explore the codebase. E
 - Healthcheck:  `wmclean doctor`
 - Tool schema:  `wmclean schema`
 
-### Exit Codes & Next Actions (Read ONLY stdout; open `r.json` ONLY if exit != 0)
-- `0`  : CLEAN (`CLEAN_EXACT` / `CLEAN_VERIFIED` / `UNTOUCHED`). Done. Do not inspect `out.pdf`.
-- `10` : PARTIAL (`FLAGGED` pages exist). Read `flagged_pages` lines in stdout.
+### Exit Codes & Next Actions (Read stdout; inspect r.json or peek crops as needed)
+- `0`  : CLEAN (`CLEAN_EXACT`: vector stream removed cleanly; `CLEAN_VERIFIED`: raster verified under content-loss and residual bounds; `UNTOUCHED`: no watermark detected or changes reverted). For critical scans, sample crops via `wmclean peek`.
+- `10` : PARTIAL (`FLAGGED` pages exist due to occlusion or content-loss risk). Read `flagged_pages` lines in stdout.
+- `15` : UNVERIFIED (`UNVERIFIED` pages exist: watermark residual was not successfully removed under verified bounds). Inspect `unverified_pages` lines in stdout.
 - `20` : UNSUPPORTED / ENCRYPTED. Pass `--password <pw>` if known; else report to user.
 - `30` : CORRUPT INPUT PDF. Unrecoverable syntax; report to user.
 - `40` : IO / RESOURCE / CONFIG ERROR. Check disk space or paths; re-run with `--resume`.

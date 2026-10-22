@@ -55,6 +55,7 @@ class Orchestrator:
         self.allow_size_growth = allow_size_growth
         self.allow_break_signatures = allow_break_signatures
         self.steer_dsl = steer_dsl
+        self.llm_call_count: int = 0
 
     def execute(self) -> int:
         """Run the full pipeline. Returns exit code."""
@@ -267,6 +268,7 @@ class Orchestrator:
         from wmclean.removers.skeleton_graph import skeleton_graph
         from wmclean.removers.stain_deconv import beer_lambert_stain_unmix
         from wmclean.removers.surgical_lama import surgical_lama
+        from wmclean.removers.two_regime import two_regime_fill
         from wmclean.removers.vector_ops import (
             annot_del,
             artifact_strip,
@@ -300,6 +302,7 @@ class Orchestrator:
             RemoverMethod.CONTENTS_ARRAY_SLICE: contents_array_slice,
             RemoverMethod.FONT_TABLE_ZERO: font_table_zero,
             RemoverMethod.MUPDF_LAYER_REDACT: mupdf_layer_redact,
+            RemoverMethod.TWO_REGIME_FILL: two_regime_fill,
             RemoverMethod.RASTER_TEMPLATE_WHITEN: raster_template_whiten,
             RemoverMethod.RASTER_ALPHA_INV: raster_alpha_inv,
             RemoverMethod.RASTER_COLOR_UNMIX: raster_color_unmix,
@@ -488,6 +491,31 @@ class Orchestrator:
                 template=tmpl,
             )
 
+            crop_path: Optional[str] = None
+            if state in (PageState.FLAGGED, PageState.UNVERIFIED):
+                diag_imgs = getattr(v_result, "diagnostic_images", None)
+                if diag_imgs is not None:
+                    orig_img, clean_img = diag_imgs
+                    try:
+                        from wmclean.intelligence.peek import generate_diagnostic_diff_crop
+
+                        crop_target = Path(self.output_path).with_name(
+                            f"{Path(self.output_path).stem}_p{p_num}_diff.png"
+                        )
+                        crop_path = generate_diagnostic_diff_crop(
+                            orig_img, clean_img, str(crop_target)
+                        )
+                        logger.info(
+                            "Page %d %s: saved diagnostic diff crop to %s",
+                            p_num,
+                            state.value,
+                            crop_path,
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to write diagnostic diff crop for page %d: %s", p_num, exc
+                        )
+
             pr = PageReport(
                 p=p_num,
                 st=state,
@@ -496,6 +524,7 @@ class Orchestrator:
                 loss=round(v_result.content_loss, 4) if v_result.content_loss else 0.0,
                 ms=int((time.monotonic() - t0) * 1000),
                 err=v_result.failure_code.value if v_result.failure_code else None,
+                crop=crop_path,
             )
             page_reports.append(pr)
             if self.resume:
@@ -515,6 +544,9 @@ class Orchestrator:
 
     def _compute_exit_code(self, page_reports: list[PageReport]) -> ExitCode:
         """Determine process exit code from page states."""
+        has_unverified = any(pr.st == PageState.UNVERIFIED for pr in page_reports)
+        if has_unverified:
+            return ExitCode.UNVERIFIED
         has_flagged = any(pr.st == PageState.FLAGGED for pr in page_reports)
         if has_flagged:
             return ExitCode.PARTIAL
@@ -532,6 +564,8 @@ class Orchestrator:
                 counts.untouched += 1
             elif pr.st == PageState.FLAGGED:
                 counts.flagged += 1
+            elif pr.st == PageState.UNVERIFIED:
+                counts.unverified += 1
         return counts
 
     def _write_report(
@@ -578,6 +612,7 @@ class Orchestrator:
         status_map = {
             ExitCode.SUCCESS: "OK",
             ExitCode.PARTIAL: "PARTIAL",
+            ExitCode.UNVERIFIED: "UNVERIFIED",
             ExitCode.UNSUPPORTED: "UNSUPPORTED",
             ExitCode.CORRUPT: "CORRUPT",
             ExitCode.IO_ERROR: "IO_ERROR",
@@ -593,9 +628,15 @@ class Orchestrator:
 
         lines = [
             f"WMCLEAN v{__import__('wmclean').__version__} | {self.input_path.name} -> {self.output_path.name} | status={status} (exit {exit_code.value})",
-            f"pages={counts.total} | CLEAN_EXACT={counts.exact} | CLEAN_VERIFIED={counts.verified} | UNTOUCHED={counts.untouched} | FLAGGED={counts.flagged}",
-            f"size_in={in_size_mb:.1f}MB | size_out={out_size_mb:.1f}MB ({ratio:.2f}x) | time={elapsed_ms / 1000:.1f}s | ram_peak={self._get_peak_rss_mb()}MB | llm_calls=0",
+            f"pages={counts.total} | CLEAN_EXACT={counts.exact} | CLEAN_VERIFIED={counts.verified} | UNTOUCHED={counts.untouched} | FLAGGED={counts.flagged} | UNVERIFIED={counts.unverified}",
+            f"size_in={in_size_mb:.1f}MB | size_out={out_size_mb:.1f}MB ({ratio:.2f}x) | time={elapsed_ms / 1000:.1f}s | ram_peak={self._get_peak_rss_mb()}MB | llm_calls={self.llm_call_count}",
         ]
+
+        unverified = [pr for pr in page_reports if pr.st == PageState.UNVERIFIED]
+        if unverified:
+            lines.append("unverified_pages:")
+            for pr in unverified[:20]:
+                lines.append(f"  p{pr.p}: {pr.err or 'ERR_HIGH_RESIDUAL'}")
 
         flagged = [pr for pr in page_reports if pr.st == PageState.FLAGGED]
         if flagged:

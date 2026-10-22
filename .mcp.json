@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "watermark-remover": {
+      "command": "wmclean-mcp",
+      "args": []
+    }
+  }
+}

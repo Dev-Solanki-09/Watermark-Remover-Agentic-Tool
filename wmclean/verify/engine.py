@@ -38,6 +38,58 @@ def _get_page_contents(page: pikepdf.Page) -> bytes:
     return c.read_bytes()
 
 
+def _detect_page_dpi(mupdf_page: Any, default_dpi: int = 150, max_dpi: int = 300) -> int:
+    """Detect native raster scan DPI to avoid silent downsampling of high-res scans."""
+    try:
+        w_pt = float(mupdf_page.rect.width)
+        if w_pt <= 0:
+            return default_dpi
+        images = mupdf_page.get_images()
+        if not images:
+            return default_dpi
+        max_img_w = max(int(img_info[2]) for img_info in images if len(img_info) > 2)
+        if max_img_w > 0:
+            calc_dpi = int(round(max_img_w * 72.0 / w_pt))
+            if calc_dpi >= default_dpi:
+                return min(calc_dpi, max_dpi)
+    except Exception:
+        pass
+    return default_dpi
+
+
+def _find_primary_image_xobject(page: pikepdf.Page) -> Optional[str]:
+    """Find the primary full-page scan Image XObject to update, avoiding corrupting secondary logos or icons."""
+    res = page.get("/Resources")
+    xobjs = res.get("/XObject") if res else None
+    if not xobjs:
+        return None
+    img_names = []
+    for name, obj in xobjs.items():
+        if obj.get("/Subtype") == pikepdf.Name.Image:
+            img_names.append(name)
+    if not img_names:
+        return None
+    if len(img_names) == 1:
+        return img_names[0]
+
+    best_area = -1
+    best_name = img_names[0]
+    for name in img_names:
+        obj = xobjs.get(name)
+        if obj is not None:
+            try:
+                res_obj = obj.resolve() if hasattr(obj, "resolve") else obj
+                w_obj = int(res_obj.get("/Width", 0))
+                h_obj = int(res_obj.get("/Height", 0))
+                area = w_obj * h_obj
+                if area > best_area:
+                    best_area = area
+                    best_name = name
+            except Exception:
+                pass
+    return best_name
+
+
 class VerificationEngine:
     """Coordinates remover execution and verification gating with automatic rollback."""
 
@@ -88,6 +140,7 @@ class VerificationEngine:
             logger.debug("Testing remover %s on page %d", method.value, page_idx + 1)
             try:
                 is_raster = method.value.startswith("raster_") or method in {
+                    RemoverMethod.TWO_REGIME_FILL,
                     RemoverMethod.INVERTED_BANNER_STRIP,
                     RemoverMethod.PIRACY_OCR_SPOTTER,
                     RemoverMethod.ILLUM_FLATTEN,
@@ -110,9 +163,11 @@ class VerificationEngine:
                     from wmclean.intelligence.doc_shield import parse_doc_shield
                     from wmclean.intelligence.roi_lock import apply_in_roi, clamp_roi_bbox
 
-                    # Render baseline page at 150 DPI
+                    # Render baseline page at native or detected DPI (prevents silent downsampling)
                     with pymupdf.open(stream=orig_buf.getvalue(), filetype="pdf") as doc:
-                        pix = doc[page_idx].get_pixmap(dpi=150)
+                        p_mupdf = doc[page_idx]
+                        render_dpi = _detect_page_dpi(p_mupdf, default_dpi=150, max_dpi=300)
+                        pix = p_mupdf.get_pixmap(dpi=render_dpi)
                         orig_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                             pix.h, pix.w, pix.n
                         )
@@ -156,6 +211,7 @@ class VerificationEngine:
                             )
                             return func(crop_img, tmpl_use, m, params)
                         elif method in (
+                            RemoverMethod.TWO_REGIME_FILL,
                             RemoverMethod.RASTER_TEMPLATE_WHITEN,
                             RemoverMethod.RASTER_DARK_STAMP_CONSENSUS,
                             RemoverMethod.RASTER_REGISTERED_OUTLINE_CLEAN,
@@ -240,27 +296,20 @@ class VerificationEngine:
                         )
                         continue
 
-                    wm_mask_eval = c_diff & (~shield.m_diagram)
+                    wm_mask_eval = c_diff
 
                     any_modification_attempted = True
                     v_result = verify_raster(
                         orig_arr, cleaned_arr, wm_mask=wm_mask_eval, template=template
                     )
                     if v_result.passed:
-                        # Find Image XObject names on this page
-                        res = page.get("/Resources")
-                        xobjs = res.get("/XObject") if res else None
-                        img_names = []
-                        if xobjs:
-                            for name, obj in xobjs.items():
-                                if obj.get("/Subtype") == pikepdf.Name.Image:
-                                    img_names.append(name)
-                        if img_names:
+                        # Find primary full-page scan Image XObject to update (avoids corrupting secondary logos/icons)
+                        target_img = _find_primary_image_xobject(page)
+                        if target_img:
                             is_bit = method == RemoverMethod.RASTER_BITONAL_DESPECKLE
-                            for img_name in img_names:
-                                update_page_image(
-                                    pdf, page, img_name, cleaned_arr, is_bitonal=is_bit
-                                )
+                            update_page_image(
+                                pdf, page, target_img, cleaned_arr, is_bitonal=is_bit
+                            )
                         methods_applied.append(method.value)
                         logger.info(
                             "Page %d passed raster verification using %s",
@@ -277,6 +326,7 @@ class VerificationEngine:
                             v_result.reason,
                         )
                         last_result = v_result
+                        last_result.diagnostic_images = (orig_arr.copy(), cleaned_arr.copy())
                         self._rollback_page(pdf, page, orig_contents_bytes, orig_annots_copy)
                         continue
 
@@ -388,7 +438,9 @@ class VerificationEngine:
             from wmclean.intelligence.roi_lock import apply_in_roi, clamp_roi_bbox
 
             with pymupdf.open(stream=orig_buf.getvalue(), filetype="pdf") as doc:
-                pix = doc[page_idx].get_pixmap(dpi=150)
+                p_mupdf = doc[page_idx]
+                render_dpi = _detect_page_dpi(p_mupdf, default_dpi=150, max_dpi=300)
+                pix = p_mupdf.get_pixmap(dpi=render_dpi)
                 orig_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
                 if pix.n == 4:
                     orig_arr = orig_arr[:, :, :3]
@@ -421,6 +473,7 @@ class VerificationEngine:
 
                         def _sub_run(crop):
                             if m_item in (
+                                RemoverMethod.TWO_REGIME_FILL,
                                 RemoverMethod.RASTER_TEMPLATE_WHITEN,
                                 RemoverMethod.DENSITY_SUB,
                             ):
@@ -437,6 +490,7 @@ class VerificationEngine:
                         cascade_arr = apply_in_roi(cascade_arr, r_item, _sub_run)
                     else:
                         if m_item in (
+                            RemoverMethod.TWO_REGIME_FILL,
                             RemoverMethod.RASTER_TEMPLATE_WHITEN,
                             RemoverMethod.DENSITY_SUB,
                         ):
@@ -477,15 +531,12 @@ class VerificationEngine:
                 else cascade_arr
             )
             c_diff = cv2.absdiff(orig_g, casc_g) > 8
-            wm_mask_eval = c_diff & (~shield.m_diagram)
+            wm_mask_eval = c_diff
             v_res = verify_raster(orig_arr, cascade_arr, wm_mask=wm_mask_eval, template=template)
             if v_res.passed:
-                res = page.get("/Resources")
-                xobjs = res.get("/XObject") if res else None
-                if xobjs:
-                    for name, obj in xobjs.items():
-                        if obj.get("/Subtype") == pikepdf.Name.Image:
-                            update_page_image(pdf, page, name, cascade_arr)
+                target_img = _find_primary_image_xobject(page)
+                if target_img:
+                    update_page_image(pdf, page, target_img, cascade_arr)
                 logger.info(
                     "Page %d passed raster cascade verification with %s",
                     page_idx + 1,
@@ -493,18 +544,29 @@ class VerificationEngine:
                 )
                 orig_pdf_copy.close()
                 return PageState.CLEAN_VERIFIED, cascade_applied, v_res
+            else:
+                last_result = v_res
+                last_result.diagnostic_images = (orig_arr.copy(), cascade_arr.copy())
 
         orig_pdf_copy.close()
         # If all removers failed verification, leave page completely untouched
         self._rollback_page(pdf, page, orig_contents_bytes, orig_annots_copy)
-        if last_result.passed and not methods_applied:
-            return PageState.UNTOUCHED, [], last_result
-        if not any_modification_attempted:
+        if not any_modification_attempted and not remover_funcs:
             return (
                 PageState.UNTOUCHED,
                 [],
                 VerifyResult(passed=True, residual=0.0, content_loss=0.0),
             )
+        if last_result.failure_code == FailureCode.ERR_HIGH_RESIDUAL or (
+            last_result.residual and last_result.residual > 0.035
+        ):
+            logger.warning(
+                "Page %d: watermark residual remains uncleaned (R_wm=%.4f); UNVERIFIED",
+                page_idx + 1,
+                last_result.residual or 0.0,
+            )
+            return PageState.UNVERIFIED, methods_applied, last_result
+
         logger.warning(
             "Page %d: all removers exhausted or failed verification; FLAGGED", page_idx + 1
         )

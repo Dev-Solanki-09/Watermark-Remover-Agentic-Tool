@@ -1,0 +1,10 @@
+# Cursor Rules for Watermark Remover (wmclean)
+
+- When tasked with removing watermarks from PDFs or images, DO NOT hallucinate image-inpainting solutions or explore unrelated files.
+- Execute directly via CLI:
+  `wmclean run <in.pdf> -o <out.pdf> --report <report.json>`
+- Check exit codes:
+  0 = Clean/Untouched; 10 = Partial; 15 = Unverified; 20 = Encrypted; 30 = Corrupt.
+- Never claim watermarks are guaranteed to be removed; all verification is fail-closed with measurable residual energy.
+- Use `wmclean peek <in.pdf> -p <page>` to generate diagnostic visual diff crops if verification returns exit code 15.
+- Fast verification command: `uv run pytest -q --tb=line --no-header`.

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dev-solanki-09/watermark-remover-mcp",
+  "title": "Watermark Remover MCP Server",
+  "description": "Universal forensic watermark, stamp, seal, and background overlay remover for PDFs, scanned documents, and scientific diagrams with fail-closed topological invariance and zero-smudge alpha unmixing.",
+  "version": "1.0.0",
+  "websiteUrl": "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool.git"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "packageName": "wmclean",
+      "version": "1.0.0"
+    }
+  ],
+  "transports": [
+    {
+      "type": "stdio",
+      "command": "wmclean-mcp"
+    },
+    {
+      "type": "streamable-http",
+      "url": "http://localhost:8000/mcp"
+    }
+  ],
+  "capabilities": {
+    "tools": [
+      {
+        "name": "remove_watermark_auto",
+        "description": "Universal watermark, stamp, seal, and background overlay remover for PDFs, scanned documents, scientific diagrams, chemical structures, and photographs."
+      },
+      {
+        "name": "inspect_watermark_layers",
+        "description": "Diagnoses whether a watermark is a removable vector PDF layer (XObject/OCG/Artifact), a semi-transparent alpha blend, or an opaque raster stamp across document pages."
+      },
+      {
+        "name": "benchmark_page",
+        "description": "Runs objective forensic verification benchmarks on a specific page, measuring residual watermark energy, authentic stroke retention, outside-mask invariance, and topological loop continuity."
+      }
+    ]
+  }
+}

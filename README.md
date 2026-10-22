@@ -1,6 +1,6 @@
 # Watermark-Remover-Agentic-Tool (`wmclean`)
 
-[![CI](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/actions)
+
 [![Version](https://img.shields.io/badge/version-0.0.1--beta-blue.svg)](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/releases)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

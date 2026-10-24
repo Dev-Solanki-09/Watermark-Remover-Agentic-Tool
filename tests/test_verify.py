@@ -89,8 +89,7 @@ def test_verify_raster_high_residual():
     # Incomplete cleaning: dark residue remains
     bad_clean = wm.copy()
 
-    mask = np.zeros((300, 300), dtype=bool)
-    mask[170:220, 20:250] = True
+    mask = (wm != orig).any(axis=2)
 
     result = verify_raster(wm, bad_clean, wm_mask=mask)
     assert result.passed is False

@@ -83,20 +83,20 @@ def evaluate_page_cleaning(
     # 4. Optional OCR evaluation if rapidocr or pytesseract is installed
     ocr_cer = None
     try:
-        from wmclean.deps import is_rapidocr_available
-        if is_rapidocr_available():
-            from rapidocr_onnxruntime import RapidOCR
-            engine = RapidOCR()
-            txt_gt, _ = engine(cv2.cvtColor(clean_gt_bgr, cv2.COLOR_BGR2RGB))
-            txt_out, _ = engine(cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2RGB))
-            str_gt = "".join([line[1] for line in txt_gt]) if txt_gt else ""
-            str_out = "".join([line[1] for line in txt_out]) if txt_out else ""
-            if len(str_gt) > 0:
-                import difflib
-                matcher = difflib.SequenceMatcher(None, str_gt, str_out)
-                ocr_cer = 1.0 - matcher.ratio()
-            else:
-                ocr_cer = 0.0
+        from wmclean.deps import get_rapidocr, has_rapidocr
+        if has_rapidocr():
+            engine = get_rapidocr()
+            if engine is not None:
+                txt_gt, _ = engine(cv2.cvtColor(clean_gt_bgr, cv2.COLOR_BGR2RGB))
+                txt_out, _ = engine(cv2.cvtColor(cleaned_bgr, cv2.COLOR_BGR2RGB))
+                str_gt = "".join([line[1] for line in txt_gt]) if txt_gt else ""
+                str_out = "".join([line[1] for line in txt_out]) if txt_out else ""
+                if len(str_gt) > 0:
+                    import difflib
+                    matcher = difflib.SequenceMatcher(None, str_gt, str_out)
+                    ocr_cer = 1.0 - matcher.ratio()
+                else:
+                    ocr_cer = 0.0
     except Exception:
         ocr_cer = None
 
@@ -114,15 +114,39 @@ def evaluate_page_cleaning(
 
 
 def profile_execution(clean_fn: Callable[[], np.ndarray]) -> tuple[np.ndarray, float, float]:
-    """Execute clean_fn while tracking execution time and peak memory."""
+    """Execute clean_fn while tracking execution time and true peak memory (sampling every 5ms)."""
+    import threading
+
     process = psutil.Process()
-    ram_before = process.memory_info().rss / (1024 * 1024)
+    peak_bytes = process.memory_info().rss
+    stop_event = threading.Event()
+
+    def _monitor():
+        nonlocal peak_bytes
+        while not stop_event.is_set():
+            try:
+                rss = process.memory_info().rss
+                if rss > peak_bytes:
+                    peak_bytes = rss
+            except Exception:
+                pass
+            time.sleep(0.005)
+
+    monitor_thread = threading.Thread(target=_monitor, daemon=True)
+    monitor_thread.start()
 
     t0 = time.perf_counter()
-    result = clean_fn()
-    duration = time.perf_counter() - t0
+    try:
+        result = clean_fn()
+    finally:
+        stop_event.set()
+        monitor_thread.join(timeout=0.2)
+        duration = time.perf_counter() - t0
+        try:
+            peak_bytes = max(peak_bytes, process.memory_info().rss)
+        except Exception:
+            pass
 
-    ram_after = process.memory_info().rss / (1024 * 1024)
-    peak_ram = max(ram_before, ram_after)
-
+    peak_ram = peak_bytes / (1024 * 1024)
     return result, duration, peak_ram
+

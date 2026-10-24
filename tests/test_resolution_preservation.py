@@ -1,11 +1,10 @@
 """Unit test verifying native 300 DPI scan resolution preservation."""
 
 from pathlib import Path
+
 import cv2
 import numpy as np
-import pikepdf
 import pymupdf
-import pytest
 
 from wmclean.verify.engine import _detect_page_dpi
 

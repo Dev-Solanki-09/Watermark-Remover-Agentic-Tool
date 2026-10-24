@@ -64,30 +64,48 @@ def _find_primary_image_xobject(page: pikepdf.Page) -> Optional[str]:
     if not xobjs:
         return None
     img_names = []
-    for name, obj in xobjs.items():
-        if obj.get("/Subtype") == pikepdf.Name.Image:
+    for name, item in xobjs.items():
+        if item.get("/Subtype") == pikepdf.Name.Image:
             img_names.append(name)
     if not img_names:
         return None
     if len(img_names) == 1:
         return img_names[0]
 
-    best_area = -1
-    best_name = img_names[0]
+    # Calculate page aspect ratio if mediabox exists
+    page_ar = 1.0
+    try:
+        mbox = page.get("/MediaBox")
+        if mbox and len(mbox) == 4:
+            pw = float(mbox[2]) - float(mbox[0])
+            ph = float(mbox[3]) - float(mbox[1])
+            if ph > 0:
+                page_ar = pw / ph
+    except Exception:
+        page_ar = 1.0
+
+    best_score = -1.0
+    best_name: Optional[str] = None
     for name in img_names:
-        obj = xobjs.get(name)
-        if obj is not None:
+        raw_obj = xobjs.get(name)
+        if raw_obj is not None:
             try:
-                res_obj = obj.resolve() if hasattr(obj, "resolve") else obj
+                res_obj = raw_obj.resolve() if hasattr(raw_obj, "resolve") else raw_obj
                 w_obj = int(res_obj.get("/Width", 0))
                 h_obj = int(res_obj.get("/Height", 0))
-                area = w_obj * h_obj
-                if area > best_area:
-                    best_area = area
+                area = float(w_obj * h_obj)
+                if area < 10000:
+                    continue  # Ignore tiny icons/glyphs
+                img_ar = w_obj / max(1.0, float(h_obj))
+                # Prefer images matching page aspect ratio (ratio penalty close to 1)
+                ar_diff = abs(img_ar - page_ar) / max(0.1, page_ar)
+                score = area / (1.0 + ar_diff * 2.0)
+                if score > best_score:
+                    best_score = score
                     best_name = name
             except Exception:
                 pass
-    return best_name
+    return best_name or img_names[0]
 
 
 class VerificationEngine:
@@ -183,10 +201,16 @@ class VerificationEngine:
                         RemoverMethod.RASTER_COLOR_UNMIX,
                         RemoverMethod.RASTER_HUE_SELECTIVE_UNMIX,
                         RemoverMethod.BEER_LAMBERT_STAIN_UNMIX,
-                        RemoverMethod.POINTWISE_HUE_AND_LUT,
                     ):
                         hsv = cv2.cvtColor(orig_arr, cv2.COLOR_RGB2HSV)
                         mask = (hsv[:, :, 1] > 25).astype(np.uint8) * 255
+                    elif method == RemoverMethod.POINTWISE_HUE_AND_LUT:
+                        hsv = cv2.cvtColor(orig_arr, cv2.COLOR_RGB2HSV)
+                        sat_p95 = np.percentile(hsv[:, :, 1], 95)
+                        if sat_p95 > 15:
+                            mask = (hsv[:, :, 1] > 20).astype(np.uint8) * 255
+                        else:
+                            mask = ((grey >= 110) & (grey <= 248)).astype(np.uint8) * 255
                     elif method == RemoverMethod.RASTER_BITONAL_DESPECKLE:
                         mask = np.ones_like(grey, dtype=np.uint8) * 255
                     elif method == RemoverMethod.RASTER_FFT_NOTCH:

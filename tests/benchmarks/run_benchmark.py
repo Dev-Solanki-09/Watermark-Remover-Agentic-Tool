@@ -84,44 +84,87 @@ def run_single_fixture_benchmark(
     out_pdf = tmp_dir / f"{fixture.fixture_id}_out.pdf"
     report_json = tmp_dir / f"{fixture.fixture_id}_report.json"
 
+    fh, fw = fixture.watermarked_bgr.shape[:2]
+    pt_w = fw * 72.0 / fixture.dpi
+    pt_h = fh * 72.0 / fixture.dpi
+
     doc = pymupdf.open()
-    pt_w = 595
-    pt_h = 842
     page = doc.new_page(width=pt_w, height=pt_h)
     _, png_bytes = cv2.imencode(".png", fixture.watermarked_bgr)
     page.insert_image(pymupdf.Rect(0, 0, pt_w, pt_h), stream=png_bytes.tobytes())
     doc.save(str(in_pdf))
     doc.close()
 
-    proc = psutil.Process()
-    ram_before = proc.memory_info().rss / (1024 * 1024)
-    t0 = time.perf_counter()
-
+    t_wmclean = 0.0
+    peak_ram = 0.0
     orch = Orchestrator(str(in_pdf), str(out_pdf), report_path=str(report_json))
     try:
-        orch.execute()
-        t_wmclean = time.perf_counter() - t0
-        ram_after = proc.memory_info().rss / (1024 * 1024)
-        peak_ram = max(ram_before, ram_after)
+        import threading
+        proc = psutil.Process()
+        peak_bytes = proc.memory_info().rss
+        stop_event = threading.Event()
+
+        def _monitor():
+            nonlocal peak_bytes
+            while not stop_event.is_set():
+                try:
+                    rss = proc.memory_info().rss
+                    if rss > peak_bytes:
+                        peak_bytes = rss
+                except Exception:
+                    pass
+                time.sleep(0.005)
+
+        mon_t = threading.Thread(target=_monitor, daemon=True)
+        mon_t.start()
+        t0 = time.perf_counter()
+        try:
+            orch.execute()
+        finally:
+            stop_event.set()
+            mon_t.join(timeout=0.2)
+            t_wmclean = time.perf_counter() - t0
+            try:
+                peak_bytes = max(peak_bytes, proc.memory_info().rss)
+            except Exception:
+                pass
+
+        peak_ram = peak_bytes / (1024 * 1024)
 
         # Extract cleaned raster image
         if out_pdf.exists():
             out_doc = pymupdf.open(str(out_pdf))
             out_page = out_doc[0]
-            pix = out_page.get_pixmap(dpi=fixture.dpi)
-            wmclean_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-            if pix.n == 4:
-                wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_RGBA2BGR)
-            elif pix.n == 3:
-                wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_RGB2BGR)
+            imgs = out_page.get_images()
+            if imgs:
+                xref = imgs[0][0]
+                extracted = out_doc.extract_image(xref)
+                decoded = cv2.imdecode(np.frombuffer(extracted["image"], dtype=np.uint8), cv2.IMREAD_COLOR)
+                if decoded is not None:
+                    wmclean_bgr = decoded
+                else:
+                    pix = out_page.get_pixmap(dpi=fixture.dpi)
+                    wmclean_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                    wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_RGBA2BGR if pix.n == 4 else cv2.COLOR_RGB2BGR if pix.n == 3 else cv2.COLOR_GRAY2BGR)
             else:
-                wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_GRAY2BGR)
+                pix = out_page.get_pixmap(dpi=fixture.dpi)
+                wmclean_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                if pix.n == 4:
+                    wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_RGBA2BGR)
+                elif pix.n == 3:
+                    wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_RGB2BGR)
+                else:
+                    wmclean_bgr = cv2.cvtColor(wmclean_arr, cv2.COLOR_GRAY2BGR)
             out_doc.close()
 
-            # Align dimensions if slight off-by-one rounding in pixmap
-            fh, fw = fixture.clean_bgr.shape[:2]
-            if wmclean_bgr.shape[:2] != (fh, fw):
-                wmclean_bgr = cv2.resize(wmclean_bgr, (fw, fh), interpolation=cv2.INTER_AREA)
+            # Align dimensions via slice/pad if off-by-one, never resize/interpolate
+            gh, gw = fixture.clean_bgr.shape[:2]
+            if wmclean_bgr.shape[:2] != (gh, gw):
+                aligned = np.full((gh, gw, 3), 255, dtype=np.uint8)
+                ch = min(gh, wmclean_bgr.shape[0])
+                cw = min(gw, wmclean_bgr.shape[1])
+                aligned[:ch, :cw] = wmclean_bgr[:ch, :cw]
+                wmclean_bgr = aligned
 
             results.append(
                 evaluate_page_cleaning(
@@ -146,13 +189,12 @@ def run_single_fixture_benchmark(
                     ink_loss_rate=1.0,
                     outside_mask_change_rate=1.0,
                     duration_sec=round(t_wmclean, 3),
-                    peak_ram_mb=round(ram_before, 1),
+                    peak_ram_mb=round(peak_ram, 1),
                     ocr_cer=None,
                     extra={"error": "Output PDF was not produced"},
                 )
             )
     except Exception as exc:
-        t_wmclean = time.perf_counter() - t0
         results.append(
             EvaluationResult(
                 method_name="wmclean (active)",
@@ -161,7 +203,7 @@ def run_single_fixture_benchmark(
                 ink_loss_rate=1.0,
                 outside_mask_change_rate=1.0,
                 duration_sec=round(t_wmclean, 3),
-                peak_ram_mb=round(ram_before, 1),
+                peak_ram_mb=round(peak_ram, 1),
                 ocr_cer=None,
                 extra={"error": str(exc)},
             )

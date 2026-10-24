@@ -129,7 +129,12 @@ def parse_doc_shield(
     # Exclude watermark chroma and template mask
     known_wm = is_wm_chroma.copy()
     if template_mask is not None:
-        known_wm |= template_mask > 0
+        tm_bool = (
+            np.any(template_mask > 0, axis=2)
+            if template_mask.ndim == 3
+            else (template_mask > 0)
+        )
+        known_wm |= tm_bool
 
     m_core = np.zeros((h, w), dtype=bool)
     if has_doxapy():

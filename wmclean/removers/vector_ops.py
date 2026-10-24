@@ -448,7 +448,53 @@ def xobj_do_strip(
         _gc_xobjects(page, entries, remove_indices)
         logger.info("xobj_do_strip: removed %d Do calls", removed_count)
 
+    # Also strip target Do calls nested within container Form XObjects
+    if res and "/XObject" in res:
+        for xo_name, xo_ref in res["/XObject"].items():
+            try:
+                sub_xo = xo_ref.resolve() if hasattr(xo_ref, "resolve") else xo_ref
+                if str(sub_xo.get("/Subtype", "")) == "/Form":
+                    removed_count += _strip_form_xobject_dos(sub_xo, target_names, depth=1)
+            except Exception:
+                continue
+
     return removed_count
+
+
+def _strip_form_xobject_dos(form_obj, target_names: set[str], depth: int = 1) -> int:
+    """Recursively strip target Do calls from inside a Form XObject's content stream."""
+    if depth > _MAX_FORM_DEPTH:
+        return 0
+    try:
+        cmds = pikepdf.parse_content_stream(form_obj)
+    except Exception:
+        return 0
+
+    new_cmds = []
+    removed = 0
+    for operands, operator in cmds:
+        if operator == pikepdf.Operator("Do") and operands:
+            xname = str(operands[0])
+            if xname in target_names or xname.lstrip("/") in target_names:
+                removed += 1
+                continue
+        new_cmds.append((operands, operator))
+
+    if removed > 0:
+        form_obj.write(pikepdf.unparse_content_stream(new_cmds))
+
+    # Recurse into child Form XObjects
+    sub_res = form_obj.get("/Resources")
+    if sub_res and "/XObject" in sub_res:
+        for _, sub_ref in sub_res["/XObject"].items():
+            try:
+                sub_xo = sub_ref.resolve() if hasattr(sub_ref, "resolve") else sub_ref
+                if str(sub_xo.get("/Subtype", "")) == "/Form":
+                    removed += _strip_form_xobject_dos(sub_xo, target_names, depth + 1)
+            except Exception:
+                continue
+
+    return removed
 
 
 def _gc_xobjects(

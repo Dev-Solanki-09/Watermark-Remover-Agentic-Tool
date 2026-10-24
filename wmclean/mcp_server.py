@@ -14,8 +14,22 @@ from typing import Any, Dict, Optional
 
 try:
     from mcp.server.mcpserver import MCPServer
-except ImportError:
-    from mcp.server.fastmcp import FastMCP as MCPServer
+except Exception:
+    import importlib
+
+    try:
+        fastmcp_mod = importlib.import_module("mcp.server.fastmcp")
+        MCPServer = getattr(fastmcp_mod, "FastMCP")
+    except Exception:
+        class MCPServer:  # type: ignore[no-redef]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def tool(self, *args: Any, **kwargs: Any) -> Any:
+                return lambda f: f
+
+            def run(self, *args: Any, **kwargs: Any) -> None:
+                pass
 
 from wmclean.orchestrator import Orchestrator
 from wmclean.probe.document import probe_document
@@ -236,9 +250,92 @@ def benchmark_page(file_path: str, page_number: int = 1) -> Dict[str, Any]:
     }
 
 
+@mcp.tool()
+def dewarp_document_page(
+    file_path: str,
+    output_path: Optional[str] = None,
+    page_number: int = 1,
+    mode: str = "auto",
+) -> Dict[str, Any]:
+    """Execute zero-crop geometric dewarping and deskewing on a document page or image.
+
+    Straightens tilted pages, unrolls book-gutter spine curvature, and flattens wavy paper
+    bulges while dynamically expanding the canvas to guarantee zero margin cropping.
+
+    Args:
+        file_path: Path to the input PDF or image file.
+        output_path: Optional output path for the dewarped PDF or image.
+        page_number: 1-based page number (for PDFs).
+        mode: Dewarping mode ('auto', 'skew', 'gutter', 'bump').
+
+    Returns:
+        Structured JSON dictionary containing modality, applied flag, original_dims,
+        rectified_dims, and latency_ms.
+    """
+    in_p = Path(file_path).resolve()
+    if not in_p.exists():
+        return {"error": f"File not found: {file_path}"}
+
+    import cv2
+    import numpy as np
+
+    from wmclean.geometry.dewarp import dewarp_page
+    from wmclean.geometry.probe_geom import probe_page_geometry
+    from wmclean.schemas import GeometricModality
+
+    ext = in_p.suffix.lower()
+    if ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"):
+        img = cv2.imread(str(in_p))
+        if img is None:
+            return {"error": f"Failed to read image: {file_path}"}
+    else:
+        import pymupdf
+
+        with pymupdf.open(str(in_p)) as doc:
+            if page_number < 1 or page_number > len(doc):
+                return {"error": f"Page number {page_number} out of range (1..{len(doc)})"}
+            p = doc[page_number - 1]
+            pix = p.get_pixmap(dpi=150)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+            if pix.n == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+            elif pix.n == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    probe = None
+    if mode != "auto":
+        forced_modality = {
+            "skew": GeometricModality.GEOM_SKEW_RIGID,
+            "gutter": GeometricModality.GEOM_GUTTER_CURVE,
+            "bump": GeometricModality.GEOM_WAVY_BUMP,
+        }.get(mode, GeometricModality.GEOM_FLAT)
+        probe = probe_page_geometry(img)
+        probe.modality = forced_modality
+
+    rectified, res = dewarp_page(img, probe=probe)
+
+    if output_path:
+        out_p = Path(output_path).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out_p), rectified)
+
+    return {
+        "file": str(in_p),
+        "page": page_number,
+        "modality": res.modality.value,
+        "applied": res.applied,
+        "original_dims": res.original_dims,
+        "rectified_dims": res.rectified_dims,
+        "skew_deg": res.skew_deg,
+        "processing_ms": res.processing_ms,
+        "summary": res.summary,
+    }
+
+
 def main():
     """Run FastMCP server over standard I/O transport."""
     mcp.run()
+
 
 
 if __name__ == "__main__":

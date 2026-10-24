@@ -58,9 +58,9 @@ def verify_raster(
         )
 
     # 1. Check for Opaque Occlusion (e.g. FX_G19 pitch black rectangle)
-    # Detect if original has an opaque pitch black patch covering text
-    dark_mask = orig_grey < 5
-    if np.sum(dark_mask) > 1000:
+    # Detect if document has an unrecoverable massive opaque occluding block covering text
+    dark_mask = (orig_grey < 5) & (clean_grey < 5)
+    if np.sum(dark_mask) > 5000:
         # Check if connected component forms a solid opaque occluding block
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
             dark_mask.astype(np.uint8), connectivity=8
@@ -68,14 +68,29 @@ def verify_raster(
         for i in range(1, num_labels):
             w = stats[i, cv2.CC_STAT_WIDTH]
             h = stats[i, cv2.CC_STAT_HEIGHT]
-            area = stats[i, cv2.CC_STAT_AREA]
-            if w > 100 and h > 30 and area > 3000:
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            cx, cy = float(centroids[i][0]), float(centroids[i][1])
+            is_body = (
+                cy > orig_grey.shape[0] * 0.12
+                and cy < orig_grey.shape[0] * 0.88
+                and cx > orig_grey.shape[1] * 0.08
+                and cx < orig_grey.shape[1] * 0.92
+            )
+            if (
+                is_body
+                and w > int(orig_grey.shape[1] * 0.35)
+                and h > int(orig_grey.shape[0] * 0.08)
+                and area > 10000
+            ):
                 logger.warning("verify_raster: detected opaque occlusion block (%d px)", area)
                 return VerifyResult(
                     passed=False,
                     failure_code=FailureCode.ERR_OPAQUE_OCCLUSION,
                     reason=f"Opaque dark occlusion detected (area={area}px, size={w}x{h}); unrecoverable text corruption",
                 )
+
+    if wm_mask is not None and getattr(wm_mask, "ndim", 0) == 3:
+        wm_mask = np.any(wm_mask > 0, axis=2)
 
     # Compute default watermark mask if none provided
     if wm_mask is None:
@@ -152,7 +167,7 @@ def verify_raster(
     cand_wm = (~m_author) & (orig_grey < (bg_orig - 12))
 
     if wm_mask is not None:
-        eval_mask = (wm_mask & (~m_author)) | cand_wm
+        eval_mask = wm_mask & (~m_author)
     else:
         eval_mask = cand_wm
 
@@ -180,26 +195,35 @@ def verify_raster(
         t_diff = np.maximum(0.0, bg_t - t_grey.astype(np.float32))
         t_norm_energy = np.sqrt(np.sum(t_diff**2))
         if t_norm_energy > 50.0:
-            clean_diff = np.maximum(0.0, bg_clean - clean_grey.astype(np.float32))
-            clean_diff[m_author] = 0.0
+            orig_diff = np.maximum(0.0, bg_orig - orig_grey.astype(np.float32))
+            orig_diff[m_author] = 0.0
             sub_t = t_diff > 10
-            c_norm_energy = np.sqrt(np.sum(clean_diff[sub_t] ** 2))
-            if c_norm_energy > 50.0:
-                corr = float(
-                    np.sum(t_diff[sub_t] * clean_diff[sub_t])
-                    / (np.sqrt(np.sum(t_diff[sub_t] ** 2)) * c_norm_energy)
+            o_norm_energy = np.sqrt(np.sum(orig_diff[sub_t] ** 2))
+            if o_norm_energy > 50.0:
+                orig_corr = float(
+                    np.sum(t_diff[sub_t] * orig_diff[sub_t])
+                    / (np.sqrt(np.sum(t_diff[sub_t] ** 2)) * o_norm_energy)
                 )
-                if corr > 0.40:
-                    logger.warning(
-                        "verify_raster failed: detector template correlation=%.3f > 0.40", corr
-                    )
-                    return VerifyResult(
-                        passed=False,
-                        residual=round(max(residual, corr * 0.08), 4),
-                        content_loss=round(content_loss, 4),
-                        failure_code=FailureCode.ERR_HIGH_RESIDUAL,
-                        reason=f"Watermark template correlation exceeded ({corr:.3f} > 0.40)",
-                    )
+                if orig_corr >= 0.30:
+                    clean_diff = np.maximum(0.0, bg_clean - clean_grey.astype(np.float32))
+                    clean_diff[m_author] = 0.0
+                    c_norm_energy = np.sqrt(np.sum(clean_diff[sub_t] ** 2))
+                    if c_norm_energy > 50.0:
+                        corr = float(
+                            np.sum(t_diff[sub_t] * clean_diff[sub_t])
+                            / (np.sqrt(np.sum(t_diff[sub_t] ** 2)) * c_norm_energy)
+                        )
+                        if corr > 0.40:
+                            logger.warning(
+                                "verify_raster failed: detector template correlation=%.3f > 0.40", corr
+                            )
+                            return VerifyResult(
+                                passed=False,
+                                residual=round(max(residual, corr * 0.08), 4),
+                                content_loss=round(content_loss, 4),
+                                failure_code=FailureCode.ERR_HIGH_RESIDUAL,
+                                reason=f"Watermark template correlation exceeded ({corr:.3f} > 0.40)",
+                            )
 
     # 5. Outside Mask Maximum Pixel Difference
     # Pixels outside the watermark mask must remain unaltered.

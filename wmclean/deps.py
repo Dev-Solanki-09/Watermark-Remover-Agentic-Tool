@@ -72,6 +72,10 @@ def has_rapidocr() -> bool:
     )
 
 
+# Alias for backwards compatibility
+is_rapidocr_available = has_rapidocr
+
+
 def get_rapidocr() -> Optional[Any]:
     """Lazy-load and return RapidOCR singleton engine if installed."""
     global _RAPIDOCR_INSTANCE, _RAPIDOCR_CHECKED
@@ -207,3 +211,60 @@ def get_sknw() -> Optional[Any]:
         _SKNW_MODULE = None
 
     return _SKNW_MODULE
+
+
+_DESKEW_MODULE: Optional[Any] = None
+_DESKEW_CHECKED: bool = False
+
+
+def has_deskew() -> bool:
+    """Check if deskew library is available."""
+    return importlib.util.find_spec("deskew") is not None
+
+
+def get_deskew() -> Optional[Any]:
+    """Lazy-load and return deskew module if installed."""
+    global _DESKEW_MODULE, _DESKEW_CHECKED
+    if _DESKEW_CHECKED:
+        return _DESKEW_MODULE
+
+    _DESKEW_CHECKED = True
+    try:
+        import deskew
+
+        _DESKEW_MODULE = deskew
+        logger.debug("deskew loaded successfully")
+    except Exception as exc:
+        logger.debug("deskew not available: %s", exc)
+        _DESKEW_MODULE = None
+
+    return _DESKEW_MODULE
+
+
+_PAGE_DEWARP_MODULE: Optional[Any] = None
+_PAGE_DEWARP_CHECKED: bool = False
+
+
+def has_page_dewarp() -> bool:
+    """Check if page_dewarp library is available."""
+    return importlib.util.find_spec("page_dewarp") is not None
+
+
+def get_page_dewarp() -> Optional[Any]:
+    """Lazy-load and return page_dewarp module if installed."""
+    global _PAGE_DEWARP_MODULE, _PAGE_DEWARP_CHECKED
+    if _PAGE_DEWARP_CHECKED:
+        return _PAGE_DEWARP_MODULE
+
+    _PAGE_DEWARP_CHECKED = True
+    try:
+        import page_dewarp
+
+        _PAGE_DEWARP_MODULE = page_dewarp
+        logger.debug("page_dewarp loaded successfully")
+    except Exception as exc:
+        logger.debug("page_dewarp not available: %s", exc)
+        _PAGE_DEWARP_MODULE = None
+
+    return _PAGE_DEWARP_MODULE
+

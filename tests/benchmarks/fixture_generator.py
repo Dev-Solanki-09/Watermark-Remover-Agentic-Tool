@@ -390,9 +390,11 @@ def composite_watermark(
     if jpeg_quality is not None:
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
         _, enc = cv2.imencode(".jpg", composite, encode_param)
-        composite = cv2.imdecode(enc, cv2.IMREAD_COLOR)
+        dec = cv2.imdecode(enc, cv2.IMREAD_COLOR)
+        if dec is not None:
+            composite = dec
 
-    return composite, wm_mask_gt
+    return composite, wm_mask_gt.astype(np.uint8)
 
 
 def generate_benchmark_suite(quick: bool = True) -> List[BenchmarkFixture]:

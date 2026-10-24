@@ -383,46 +383,64 @@ def _extract_text_candidates(
 
 
 def _extract_xobj_candidates(
-    page: pikepdf.Page, kind: Optional[PageKind] = None
+    page: pikepdf.Page, kind: Optional[PageKind] = None, fitz_page=None
 ) -> list[XObjCandidate]:
-    """Extract image and form XObject candidates from page resources."""
+    """Extract image and form XObject candidates from page resources.
+
+    Container Form XObjects (which encapsulate fonts, text streams, or child objects)
+    are traversed so that only actual leaf images/stamps are identified as candidates.
+    """
     results = []
     resources = page.get("/Resources")
     if resources is None:
         return results
 
-    xobjects = resources.get("/XObject")
-    if xobjects is None:
-        return results
+    def _collect_leaf_xobjects(res, depth=0):
+        if depth > 4 or res is None:
+            return []
+        xo_dict = res.get("/XObject")
+        if not xo_dict:
+            return []
+        leaves = []
+        for name, xobj_ref in xo_dict.items():
+            try:
+                xobj = xobj_ref.resolve() if hasattr(xobj_ref, "resolve") else xobj_ref
+            except Exception:
+                continue
+            subtype = str(xobj.get("/Subtype", ""))
+            xref = xobj_ref.objgen[0] if hasattr(xobj_ref, "objgen") else 0
+
+            if subtype == "/Image":
+                leaves.append((str(name), xref, "IMAGE", xobj))
+            elif subtype == "/Form":
+                f_res = xobj.get("/Resources")
+                is_container = False
+                if f_res is not None and ("/Font" in f_res or "/XObject" in f_res):
+                    is_container = True
+                if is_container:
+                    leaves.extend(_collect_leaf_xobjects(f_res, depth + 1))
+                else:
+                    leaves.append((str(name), xref, "FORM", xobj))
+        return leaves
+
+    leaf_xobjs = _collect_leaf_xobjects(resources)
 
     # Scanned pages have a single full-page background image which is the document itself
-    if kind == PageKind.SCAN and len(xobjects) == 1:
+    if kind in (PageKind.SCAN, PageKind.SCAN_OCR) and len(leaf_xobjs) == 1:
         return results
 
-    for name, xobj_ref in xobjects.items():
-        try:
-            xobj = xobj_ref.resolve() if hasattr(xobj_ref, "resolve") else xobj_ref
-        except Exception:
-            continue
-
-        subtype = str(xobj.get("/Subtype", ""))
-        if subtype == "/Image":
-            xobj_kind = "IMAGE"
-        elif subtype == "/Form":
-            xobj_kind = "FORM"
-        else:
-            continue
-
-        xref = xobj_ref.objgen[0] if hasattr(xobj_ref, "objgen") else 0
-
-        # BBox for form XObjects; for images we need CTM from content stream
+    for name, xref, xobj_kind, xobj in leaf_xobjs:
         bb = [0.0, 0.0, 0.0, 0.0]
         if xobj_kind == "FORM" and "/BBox" in xobj:
             bb = [float(x) for x in xobj["/BBox"]]
+        elif xobj_kind == "IMAGE":
+            w = float(xobj.get("/Width", 0))
+            h = float(xobj.get("/Height", 0))
+            bb = [0.0, 0.0, w, h]
 
         results.append(
             XObjCandidate(
-                name=str(name),
+                name=name,
                 xref=xref,
                 kind=xobj_kind,
                 bb=bb,
@@ -566,30 +584,58 @@ def _extract_path_candidates(page: pikepdf.Page) -> list[PathCandidate]:
 # ---------------------------------------------------------------------------
 
 
-def _classify_page_kind(page: pikepdf.Page) -> PageKind:
+def _classify_page_kind(page: pikepdf.Page, fitz_page=None) -> PageKind:
     """Classify page as VECTOR, SCAN, SCAN_OCR, HYBRID, or BITONAL."""
+    if fitz_page is not None:
+        try:
+            text = fitz_page.get_text().strip()
+            images = fitz_page.get_images()
+            has_vector_text = len(text) > 0
+            has_images = len(images) > 0
+            if has_images:
+                for img in images:
+                    if len(img) > 4 and img[4] == 1:
+                        return PageKind.BITONAL
+            if has_images and has_vector_text:
+                return PageKind.HYBRID
+            elif has_images:
+                return PageKind.SCAN
+            elif has_vector_text:
+                return PageKind.VECTOR
+            else:
+                return PageKind.VECTOR
+        except Exception:
+            pass
+
     resources = page.get("/Resources")
     has_images = False
     has_vector_text = False
 
-    if resources:
-        xobjects = resources.get("/XObject")
-        if xobjects:
-            for name, xobj_ref in xobjects.items():
+    def _inspect_xobjects(res, depth=0):
+        nonlocal has_images, has_vector_text
+        if depth > 4 or res is None:
+            return
+        xo_dict = res.get("/XObject")
+        if xo_dict:
+            for _, xobj_ref in xo_dict.items():
                 try:
-                    xobj = xobj_ref.resolve() if hasattr(xobj_ref, "resolve") else xobj_ref
-                    if str(xobj.get("/Subtype", "")) == "/Image":
+                    xo = xobj_ref.resolve() if hasattr(xobj_ref, "resolve") else xobj_ref
+                    st = str(xo.get("/Subtype", ""))
+                    if st == "/Image":
                         has_images = True
-                        # Check for bitonal
-                        bpc = int(xobj.get("/BitsPerComponent", 8))
-                        if bpc == 1:
-                            return PageKind.BITONAL
+                    elif st == "/Form":
+                        f_res = xo.get("/Resources")
+                        if f_res:
+                            if "/Font" in f_res:
+                                has_vector_text = True
+                            _inspect_xobjects(f_res, depth + 1)
                 except Exception:
                     continue
-
-        fonts = resources.get("/Font")
-        if fonts and len(fonts) > 0:
+        if "/Font" in res:
             has_vector_text = True
+
+    if resources:
+        _inspect_xobjects(resources)
 
     # Check content stream for text operators
     try:
@@ -653,14 +699,14 @@ def probe_structural(pdf: pikepdf.Pdf, page_num: int, fitz_page=None) -> ProbeRe
     total_pages = len(pdf.pages)
 
     geom = _get_page_geometry(page)
-    kind = _classify_page_kind(page)
+    kind = _classify_page_kind(page, fitz_page=fitz_page)
     rev_clean = _check_revisions(pdf)
     annots = _extract_annots(page)
     ocgs = _extract_ocgs(pdf)  # document-level, same for all pages
     artifacts = _extract_artifacts(page)
     gs_alpha = _extract_gs_alpha(page)
     text_cand = _extract_text_candidates(page, page_num, total_pages, fitz_page=fitz_page)
-    xobj_cand = _extract_xobj_candidates(page, kind=kind)
+    xobj_cand = _extract_xobj_candidates(page, kind=kind, fitz_page=fitz_page)
     path_cand = _extract_path_candidates(page)
 
     return ProbeRecord(

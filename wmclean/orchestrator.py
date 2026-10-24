@@ -45,6 +45,7 @@ class Orchestrator:
         allow_size_growth: bool = False,
         allow_break_signatures: bool = True,
         steer_dsl: Optional[str] = None,
+        dewarp: bool = False,
     ):
         self.input_path = Path(input_path)
         self.output_path = Path(output_path)
@@ -55,7 +56,9 @@ class Orchestrator:
         self.allow_size_growth = allow_size_growth
         self.allow_break_signatures = allow_break_signatures
         self.steer_dsl = steer_dsl
+        self.dewarp = dewarp
         self.llm_call_count: int = 0
+
 
     def execute(self) -> int:
         """Run the full pipeline. Returns exit code."""
@@ -156,6 +159,27 @@ class Orchestrator:
                             total_doc_pages
                         )
 
+                # Compute cross-page document frequency for XObject candidates
+                xobj_page_counts: dict[str, set[int]] = {}
+                for p_idx, rec in enumerate(records):
+                    for xc in rec.xobj_cand:
+                        w = int(xc.bb[2] - xc.bb[0]) if xc.bb else 0
+                        h = int(xc.bb[3] - xc.bb[1]) if xc.bb else 0
+                        dim_key = f"dim:{w}x{h}" if (w > 50 and h > 50) else None
+                        key = f"xref:{xc.xref}" if xc.xref > 0 else f"name:{xc.name}"
+                        xobj_page_counts.setdefault(key, set()).add(p_idx)
+                        if dim_key:
+                            xobj_page_counts.setdefault(dim_key, set()).add(p_idx)
+                for rec in records:
+                    for xc in rec.xobj_cand:
+                        w = int(xc.bb[2] - xc.bb[0]) if xc.bb else 0
+                        h = int(xc.bb[3] - xc.bb[1]) if xc.bb else 0
+                        dim_key = f"dim:{w}x{h}" if (w > 50 and h > 50) else None
+                        key = f"xref:{xc.xref}" if xc.xref > 0 else f"name:{xc.name}"
+                        cnt_key = len(xobj_page_counts.get(key, set()))
+                        cnt_dim = len(xobj_page_counts.get(dim_key, set())) if dim_key else 0
+                        xc.doc_freq = max(cnt_key, cnt_dim) / float(total_doc_pages)
+
             # Subdocument-scoped template computation (Apex v6.0 Gate 1)
             from wmclean.intelligence.gatekeeper import Gatekeeper
 
@@ -231,12 +255,45 @@ class Orchestrator:
         return records
 
     def _pass1_cluster_and_route(self, probe_records: list) -> tuple:
-        """L1 + L2: Cluster pages and route removal chains."""
+        """L1 + L2: Forensic Analysis, Ambiguity Gating & Intelligent Routing."""
+        from wmclean.analysis.forensic_analyzer import ForensicAnalyzer
+        from wmclean.analysis.vision_bridge import VisionBridge
         from wmclean.cluster.signature import compute_clusters
-        from wmclean.router.rules import route_deterministic
+        from wmclean.router.intelligent_router import IntelligentRouter
 
         clusters = compute_clusters(probe_records)
-        decision = route_deterministic(clusters, probe_records)
+
+        # Run deep forensic analysis
+        analyzer = ForensicAnalyzer(target_dpi=150)
+        dossier = analyzer.analyze_document(
+            records=probe_records,
+            pdf_path=str(self.input_path),
+            reservoir=getattr(self, "reservoir", None),
+            subdoc_templates=getattr(self, "subdoc_templates", None),
+        )
+
+        # Gated Vision / LLM fallback ONLY if information is lacking / ambiguous
+        if dossier.ambiguous_subdoc_count > 0 and self.enable_ml:
+            bridge = VisionBridge()
+            dossier = bridge.resolve_ambiguities(
+                dossier=dossier,
+                pdf_path=str(self.input_path),
+                password=self.password,
+            )
+
+        self.dossier = dossier
+
+        # Seamless Intelligent Routing
+        router = IntelligentRouter(target_dpi=150)
+        decision, dispatch_plans = router.route_document(
+            records=probe_records,
+            dossier=dossier,
+            pdf_path=str(self.input_path),
+            reservoir=getattr(self, "reservoir", None),
+            subdoc_templates=getattr(self, "subdoc_templates", None),
+        )
+        self.dispatch_plans = dispatch_plans
+
         return clusters, decision
 
     def _pass2_process(self, pdf: pikepdf.Pdf, probe_records: list, decision) -> list[PageReport]:
@@ -329,10 +386,12 @@ class Orchestrator:
 
         action_map = {act.sig_hash: act for act in decision.clusters}
         engine = VerificationEngine()
-        gatekeeper = Gatekeeper(target_dpi=150)
-        dispatch_plans = gatekeeper.plan_document(
-            probe_records, reservoir=getattr(self, "reservoir", None)
-        )
+        dispatch_plans = getattr(self, "dispatch_plans", None)
+        if dispatch_plans is None:
+            gatekeeper = Gatekeeper(target_dpi=150)
+            dispatch_plans = gatekeeper.plan_document(
+                probe_records, reservoir=getattr(self, "reservoir", None)
+            )
         plan_map = {p.page: p for p in dispatch_plans}
 
         parsed_steer_rules = []
@@ -469,18 +528,20 @@ class Orchestrator:
                 continue
 
             tmpl = None
-            if hasattr(self, "subdoc_templates") and self.subdoc_templates:
-                p_plan = plan_map.get(p_num)
-                s_id = p_plan.subdoc_id if p_plan else 0
-                tmpl = self.subdoc_templates.get(s_id)
-            if tmpl is None and hasattr(self, "reservoir") and self.reservoir:
-                p_obj = pdf.pages[i]
-                mb = [float(x) for x in p_obj.mediabox]
-                w_pt = mb[2] - mb[0]
-                h_pt = mb[3] - mb[1]
-                tw = int(w_pt * 150.0 / 72.0)
-                th = int(h_pt * 150.0 / 72.0)
-                tmpl = self.reservoir.get_template(tw, th)
+            ras = record.ras_stats
+            if ras and ras.tmpl_cov >= 0.002 and ras.tmpl_ncc >= 0.25:
+                if hasattr(self, "subdoc_templates") and self.subdoc_templates:
+                    p_plan = plan_map.get(p_num)
+                    s_id = p_plan.subdoc_id if p_plan else 0
+                    tmpl = self.subdoc_templates.get(s_id)
+                if tmpl is None and hasattr(self, "reservoir") and self.reservoir:
+                    p_obj = pdf.pages[i]
+                    mb = [float(x) for x in p_obj.mediabox]
+                    w_pt = mb[2] - mb[0]
+                    h_pt = mb[3] - mb[1]
+                    tw = int(w_pt * 150.0 / 72.0)
+                    th = int(h_pt * 150.0 / 72.0)
+                    tmpl = self.reservoir.get_template(tw, th)
 
             state, applied, v_result = engine.apply_with_rollback(
                 pdf=pdf,

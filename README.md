@@ -1,6 +1,6 @@
 # Watermark-Remover-Agentic-Tool (`wmclean`)
 
-[![Version](https://img.shields.io/badge/version-0.0.2--beta-blue.svg)](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/releases)
+[![Version](https://img.shields.io/badge/version-0.0.5--beta-blue.svg)](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/releases)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CPU-Only](https://img.shields.io/badge/hardware-CPU--only-success.svg)]()
@@ -160,11 +160,12 @@ Expected output:
 
 | Subcommand | Description | Primary Options |
 |---|---|---|
-| `run` | Process a single PDF document | `<in.pdf> -o <out.pdf> [--report <r.json>] [--steer <dsl>] [--password <pw>]` |
+| `run` | Process a single PDF document | `<in.pdf> -o <out.pdf> [--report <r.json>] [--steer <dsl>] [--dewarp] [--password <pw>]` |
 | `batch` | Recursively process directory of PDFs | `<in_dir> -o <out_dir> [--report <r.json>] [--resume] [--workers <n>]` |
 | `plan` | Structural dry-run inspection without modification | `<in.pdf> [--json <p.json>]` |
 | `peek` | Semantic zero-token ASCII page map and anomaly table | `<in.pdf> -p <page> [--crop-roi <box>] [-o <crop.png>]` |
 | `steer` | Sub-second re-steering using cached delta ledger | `<in.pdf> -s <dsl> [-o <out.pdf>]` |
+| `dewarp` | Standalone zero-crop geometric dewarping & deskewing | `<in.pdf> -o <out.pdf> [--mode auto|skew|gutter|bump] [--dpi 150]` |
 | `doctor` | Check dependencies, permissions, and RAM limits | (none) |
 | `schema` | Output JSON schema for `r.json` reports | (none) |
 
@@ -174,7 +175,7 @@ wmclean run document.pdf -o cleaned.pdf --report report.json
 ```
 Output:
 ```
-WMCLEAN v0.0.1b0 | document.pdf -> cleaned.pdf | status=OK (exit 0)
+WMCLEAN v0.0.5b0 | document.pdf -> cleaned.pdf | status=OK (exit 0)
 pages=12 | CLEAN_EXACT=10 | CLEAN_VERIFIED=2 | UNTOUCHED=0 | FLAGGED=0
 size_in=1.4MB | size_out=1.2MB (0.86x) | time=1.8s | ram_peak=142MB | llm_calls=0
 report=report.json
@@ -374,6 +375,20 @@ When `--report <path>` is passed, `wmclean` atomically writes a structured JSON 
 - **[fonttools](https://github.com/fonttools/fonttools)** — TrueType and OpenType font table parsing and glyph-contour zeroing.
 - **[skan](https://github.com/jni/skan)** (Juan Nunez-Iglesias) & **[sknw](https://github.com/Image-Py/sknw)** — Skeleton graph network extraction and topological analysis.
 - **[OpenCV](https://opencv.org/)**, **[NumPy](https://numpy.org/)** & **[SciPy](https://scipy.org/)** — SIMD array computing, distance transforms, interpolation, and morphology.
+
+### 8. Geometric Page Dewarping & Deskewing Engines
+- **[sbrunner/deskew](https://github.com/sbrunner/deskew)** (Simon Brunner)
+  - *Technique*: High-speed Hough-transform and Radon variance angular tilt detection with dynamic expanded canvas.
+  - *Usage in `wmclean`*: Powers `wmclean/geometry/probe_geom.py` and `wmclean/geometry/dewarp.py` for orientation estimation and zero-crop expanded canvas deskewing with paper-white padding.
+- **[lmmx/page-dewarp](https://github.com/lmmx/page-dewarp)** (Louis Maddox) & **[mzucker/page_dewarp](https://github.com/mzucker/page_dewarp)** (Matt Zucker)
+  - *Technique*: Classical cubic-spline developable surface unrolling for book gutter and spine curvature.
+  - *Usage in `wmclean`*: Informs `dewarp_cylindrical_gutter` parametric cubic unrolling without neural network overhead.
+- **[PINTO0309/doc-dewarping](https://github.com/PINTO0309/doc-dewarping)** (Katsuya Hyodo)
+  - *Technique*: Non-ML generalized cylindrical document dewarping with line baseline tracking.
+  - *Usage in `wmclean`*: Contributes to baseline extraction and dense inverse coordinate remapping for text straightening.
+- **[DanBloomberg/leptonica](https://github.com/DanBloomberg/leptonica)** (Dan Bloomberg)
+  - *Technique*: Document disparity-field unwarping, textline morphology, and adaptive background thresholding algorithms.
+  - *Usage in `wmclean`*: Architectural foundation for `dewarp_2d_wavy_mesh` inverse disparity field deformation.
 
 *(Note: In accordance with repository documentation policy, all autonomous agent prompt harnesses, skill scripts, and LLM orchestration wrappers are strictly excluded from technical software attribution).*
 

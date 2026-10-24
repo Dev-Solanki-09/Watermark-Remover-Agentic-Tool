@@ -98,7 +98,7 @@ def pointwise_hue_and_lut(
     # Detect if mid-grey watermark exists in regions outside text halo and diagram
     cur_gray = cv2.cvtColor(out_img, cv2.COLOR_RGB2GRAY) if is_rgb else out_img.copy()
     grey_wm_mask = (
-        (cur_gray >= 110) & (cur_gray <= 235) & (~shield.m_ink_halo_shield) & (~shield.m_diagram)
+        (cur_gray >= 110) & (cur_gray <= 248) & (~shield.m_ink_halo_shield) & (~shield.m_diagram)
     )
     if mask is not None and mask.any():
         grey_wm_mask &= mask > 0
@@ -107,7 +107,7 @@ def pointwise_hue_and_lut(
         # Determine average watermark luma floor
         wm_samples = cur_gray[grey_wm_mask]
         wm_floor = int(np.percentile(wm_samples, 25))
-        wm_floor = max(110, min(220, wm_floor))
+        wm_floor = max(110, min(230, wm_floor))
 
         lut = build_monotonic_lut(black_point=88, wm_floor=wm_floor, paper_white=255)
         lut_applied = cv2.LUT(cur_gray, lut)

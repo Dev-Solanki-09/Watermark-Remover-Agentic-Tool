@@ -233,8 +233,14 @@ def _build_params(sig: ClusterSignature, records: list[ProbeRecord]) -> RemoverP
                 if pc.hash not in params.target_path_hashes:
                     params.target_path_hashes.append(pc.hash)
         for xc in record.xobj_cand:
-            if xc.name not in params.target_xobj_names:
-                params.target_xobj_names.append(xc.name)
+            is_wm_xobj = (
+                (xc.doc_freq >= 0.20)
+                or (len(records) <= 2)
+                or any(kw in xc.name.lower() for kw in ("watermark", "stamp", "draft", "wm"))
+            )
+            if is_wm_xobj:
+                if xc.name not in params.target_xobj_names:
+                    params.target_xobj_names.append(xc.name)
         for ocg in record.ocgs:
             if ocg.xref not in params.target_ocg_xrefs:
                 params.target_ocg_xrefs.append(ocg.xref)

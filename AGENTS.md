@@ -3,8 +3,9 @@
 ## 1. EXECUTION FAST-PATH (STOP: DO NOT READ SOURCE CODE TO RUN THIS TOOL)
 If your task is to remove watermarks from PDF(s), DO NOT explore the codebase. Execute directly:
 - Preview plan: `wmclean plan <in.pdf> [--json <p.json>]`
-- Single file:  `wmclean run <in.pdf> -o <out.pdf> --report <r.json> [--steer <dsl>]`
+- Single file:  `wmclean run <in.pdf> -o <out.pdf> --report <r.json> [--steer <dsl>] [--dewarp]`
 - Batch dir:    `wmclean batch <in_dir> -o <out_dir> --report <r.json> --resume`
+- Dewarp page:  `wmclean dewarp <in.pdf> -o <out.pdf> [--mode auto|skew|gutter|bump]`
 - Page inspect: `wmclean peek <in.pdf> -p <page> [--crop-roi <box> -o <crop.png>]`
 - Time-travel:  `wmclean steer <in.pdf> -s <dsl> [-o <out.pdf>]`
 - Healthcheck:  `wmclean doctor`
@@ -23,6 +24,7 @@ If your task is to remove watermarks from PDF(s), DO NOT explore the codebase. E
 If your task is to fix a bug or add a feature, DO NOT scan the whole repo. Jump straight to:
 - CLI / Exit codes / Stdout cap (<=250 tok) -> `wmclean/cli.py`
 - Streaming / Checkpoints / RAM watchdog    -> `wmclean/orchestrator.py`
+- L-1 Zero-Crop Dewarp & Deskewing          -> `wmclean/geometry/`
 - L0 Page & Raster Probing                  -> `wmclean/probe/`
 - L0.5 Surgical Gatekeeper, ROI-Lock, DocShield -> `wmclean/intelligence/`
 - L1 Signature Clustering & SQLite Cache    -> `wmclean/cluster/`

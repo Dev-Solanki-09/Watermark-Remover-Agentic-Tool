@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -141,7 +141,7 @@ def dual_verification_qa_gate(
     orig: np.ndarray,
     cleaned: np.ndarray,
     zones: Optional[List[ZoneBox]] = None,
-) -> Tuple[bool, str, Dict[str, any]]:
+) -> Tuple[bool, str, Dict[str, Any]]:
     """Execute dual-verification QA checks across all semantic zones.
 
     - Text zones: verify zero foreground erosion (L_fg <= 0.01).
@@ -153,13 +153,14 @@ def dual_verification_qa_gate(
     if zones is None:
         zones = segment_page_zones(orig)
 
-    metrics = {
+    violations: List[str] = []
+    metrics: Dict[str, Any] = {
         "text_zones_checked": 0,
         "diagram_zones_checked": 0,
         "photo_zones_checked": 0,
         "diagram_betti_passed": True,
         "text_stroke_loss": 0.0,
-        "violations": [],
+        "violations": violations,
     }
 
     all_passed = True

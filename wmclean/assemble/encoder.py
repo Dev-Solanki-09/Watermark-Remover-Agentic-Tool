@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import zlib
-from typing import Any, Optional
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -164,46 +164,54 @@ def update_page_image(
     new_img: np.ndarray,
     is_bitonal: bool = False,
 ) -> None:
-    """Replace an Image XObject in a page's /Resources dictionary with an encoded stream."""
+    """Replace an Image XObject in a page's /Resources dictionary (or nested Form XObjects) with an encoded stream."""
     resources = page.get("/Resources")
     if resources is None:
         resources = pikepdf.Dictionary()
         page.Resources = resources
 
-    xobjects = resources.get("/XObject")
-    if xobjects is None:
-        xobjects = pikepdf.Dictionary()
-        resources.XObject = xobjects
-
-    # Find the matching key in xobjects dictionary (handling Name/str with/without slash)
-    target_key: Any = None
     target_clean = str(xobj_name).lstrip("/")
-    for k in list(xobjects.keys()):
-        if str(k).lstrip("/") == target_clean:
-            target_key = k
-            break
-    if target_key is None:
+
+    def _find_and_replace_xobj(res, depth=0) -> bool:
+        if depth > 4 or res is None:
+            return False
+        xo = res.get("/XObject")
+        if xo is None:
+            return False
+        for k in list(xo.keys()):
+            if str(k).lstrip("/") == target_clean:
+                orig_xo = xo.get(k)
+                resolved = (
+                    orig_xo.resolve()
+                    if (orig_xo is not None and hasattr(orig_xo, "resolve"))
+                    else orig_xo
+                )
+                encoded = encode_image(pdf, new_img, orig_xobj=resolved, is_bitonal=is_bitonal)
+                if resolved is not None:
+                    for meta_key in ("/Intent", "/Interpolate", "/SMask", "/Decode"):
+                        if meta_key in resolved:
+                            encoded[meta_key] = resolved[meta_key]
+                xo[k] = encoded
+                logger.debug("update_page_image: replaced XObject %s (%dx%d)", k, new_img.shape[1], new_img.shape[0])
+                return True
+
+            # Recurse into Form XObjects
+            sub_xo = xo.get(k)
+            try:
+                resolved = sub_xo.resolve() if (sub_xo is not None and hasattr(sub_xo, "resolve")) else sub_xo
+                if str(resolved.get("/Subtype", "")) == "/Form":
+                    if _find_and_replace_xobj(resolved.get("/Resources"), depth + 1):
+                        return True
+            except Exception:
+                continue
+        return False
+
+    if not _find_and_replace_xobj(resources):
+        # Fallback to direct insertion if not found
+        xobjects = resources.get("/XObject")
+        if xobjects is None:
+            xobjects = pikepdf.Dictionary()
+            resources.XObject = xobjects
         target_key = pikepdf.Name(f"/{target_clean}")
-
-    orig_xobj = xobjects.get(target_key)
-    resolved_orig = (
-        orig_xobj.resolve()
-        if (orig_xobj is not None and hasattr(orig_xobj, "resolve"))
-        else orig_xobj
-    )
-
-    encoded_stream = encode_image(pdf, new_img, orig_xobj=resolved_orig, is_bitonal=is_bitonal)
-
-    # Copy ancillary metadata from original XObject if present
-    if resolved_orig is not None:
-        for key in ("/Intent", "/Interpolate", "/SMask", "/Decode"):
-            if key in resolved_orig:
-                encoded_stream[key] = resolved_orig[key]
-
-    xobjects[target_key] = encoded_stream
-    logger.debug(
-        "update_page_image: replaced XObject %s (%dx%d)",
-        target_key,
-        new_img.shape[1],
-        new_img.shape[0],
-    )
+        encoded_stream = encode_image(pdf, new_img, orig_xobj=None, is_bitonal=is_bitonal)
+        xobjects[target_key] = encoded_stream

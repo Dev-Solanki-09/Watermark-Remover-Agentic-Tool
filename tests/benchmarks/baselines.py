@@ -58,6 +58,9 @@ class OracleThresholdBaseline:
         paper_bgr = np.median(img_bgr[gray >= 230], axis=0) if np.any(gray >= 230) else np.array([255, 255, 255])
         paper_bgr = np.clip(paper_bgr, 240, 255).astype(np.uint8)
 
+        fg_bool = fg_mask_gt.astype(bool)
+        wm_bool = wm_mask_gt.astype(bool) if wm_mask_gt is not None else np.ones((h, w), dtype=bool)
+
         # Vectorized sweep across candidate thresholds
         candidates = list(range(170, 252, 5))
         for t in candidates:
@@ -65,11 +68,11 @@ class OracleThresholdBaseline:
             whiten_mask = (gray >= t)
             # Residual: where wm was present, diff between whiten and clean_gt
             # Ink loss: where fg_mask_gt was true, count how many got whitened
-            ink_lost = np.count_nonzero(whiten_mask & fg_mask_gt)
-            ink_loss_ratio = ink_lost / max(1, np.count_nonzero(fg_mask_gt))
+            ink_lost = np.count_nonzero(whiten_mask & fg_bool)
+            ink_loss_ratio = ink_lost / max(1, np.count_nonzero(fg_bool))
 
             # Paper residual error
-            paper_pixels = (~fg_mask_gt) & (wm_mask_gt if wm_mask_gt is not None else np.ones((h, w), dtype=bool))
+            paper_pixels = (~fg_bool) & wm_bool
             if np.any(paper_pixels):
                 # Where whitened, diff is paper_bgr vs clean_gt
                 # Where not whitened, diff is img_bgr vs clean_gt

@@ -8,7 +8,7 @@ to FailureCode.
 from __future__ import annotations
 
 import enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,59 @@ class CarrierFlag(str, enum.Enum):
     RASTER_BAKED = "RASTER_BAKED"
     RASTER_BITONAL = "RASTER_BITONAL"
     REVISION_APPENDABLE = "REVISION_APPENDABLE"
+
+
+class WatermarkModality(str, enum.Enum):
+    """Forensic classification of watermark delivery mechanism and topology."""
+
+    CONTAINER_FORM_XOBJECT_STAMP = "CONTAINER_FORM_XOBJECT_STAMP"
+    TOP_LEVEL_XOBJECT_IMAGE = "TOP_LEVEL_XOBJECT_IMAGE"
+    VECTOR_TEXT_ROTATED = "VECTOR_TEXT_ROTATED"
+    VECTOR_PATH_STROKES = "VECTOR_PATH_STROKES"
+    SMASK_ALPHA_OVERLAY = "SMASK_ALPHA_OVERLAY"
+    SCANNED_NEUTRAL_GRAY = "SCANNED_NEUTRAL_GRAY"
+    SCANNED_CHROMATIC_STAMP = "SCANNED_CHROMATIC_STAMP"
+    SCANNER_MARGIN_BANNER = "SCANNER_MARGIN_BANNER"
+    ANNOTATION_STAMP = "ANNOTATION_STAMP"
+    OCG_LAYER = "OCG_LAYER"
+    CLEAN_UNTOUCHED = "CLEAN_UNTOUCHED"
+    AMBIGUOUS_UNKNOWN = "AMBIGUOUS_UNKNOWN"
+
+
+class GeometricModality(str, enum.Enum):
+    """Forensic classification of page geometric distortion."""
+
+    GEOM_FLAT = "GEOM_FLAT"
+    GEOM_SKEW_RIGID = "GEOM_SKEW_RIGID"
+    GEOM_GUTTER_CURVE = "GEOM_GUTTER_CURVE"
+    GEOM_WAVY_BUMP = "GEOM_WAVY_BUMP"
+
+
+class GeometryProbeRecord(BaseModel):
+    """Geometry distortion probe metrics for a single page."""
+
+    modality: GeometricModality = Field(default=GeometricModality.GEOM_FLAT)
+    skew_angle_deg: float = Field(default=0.0, description="Estimated angular tilt in degrees")
+    spine_dip_px: float = Field(default=0.0, description="Vertical text dip near page binding")
+    waviness_std_px: float = Field(default=0.0, description="Standard deviation of baseline wavy residuals")
+    confidence: float = Field(default=1.0)
+
+    @property
+    def is_flat(self) -> bool:
+        return self.modality == GeometricModality.GEOM_FLAT
+
+
+class DewarpResult(BaseModel):
+    """Result of geometric rectification on a single page."""
+
+    modality: GeometricModality = Field(default=GeometricModality.GEOM_FLAT)
+    applied: bool = Field(default=False)
+    original_dims: tuple[int, int] = Field(default=(0, 0))
+    rectified_dims: tuple[int, int] = Field(default=(0, 0))
+    skew_deg: float = Field(default=0.0)
+    processing_ms: int = Field(default=0)
+    summary: str = Field(default="Geometric pass untouched (page is flat)")
+
 
 
 class RemoverMethod(str, enum.Enum):
@@ -338,6 +391,42 @@ class RouterDecision(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Forensic Analysis & Dossier Schemas
+# ---------------------------------------------------------------------------
+
+
+class SubdocumentForensicProfile(BaseModel):
+    """Forensic profile for a segmented subdocument range."""
+
+    subdoc_id: int
+    page_indices: list[int]
+    page_kind: PageKind
+    detected_modality: WatermarkModality
+    completeness_score: float = Field(
+        default=1.0, description="0.0 - 1.0 information completeness metric"
+    )
+    is_ambiguous: bool = False
+    ambiguity_reason: Optional[str] = None
+    target_xobj_names: list[str] = Field(default_factory=list)
+    target_texts: list[str] = Field(default_factory=list)
+    target_path_hashes: list[str] = Field(default_factory=list)
+    lut_params: Optional[dict] = None
+    recommended_chain: list[RemoverMethod] = Field(default_factory=list)
+    requires_vision_llm: bool = False
+
+
+class DocumentForensicDossier(BaseModel):
+    """Complete multi-subdocument forensic analysis dossier."""
+
+    total_pages: int
+    subdocs: list[SubdocumentForensicProfile] = Field(default_factory=list)
+    overall_completeness: float = 1.0
+    ambiguous_subdoc_count: int = 0
+    vision_llm_invoked: bool = False
+    tokens_consumed: int = 0
+
+
+# ---------------------------------------------------------------------------
 # L4 Verify Result
 # ---------------------------------------------------------------------------
 
@@ -352,6 +441,7 @@ class VerifyResult(BaseModel):
     text_diff: int = Field(default=0, description="Edit distance of non-watermark text tuples")
     reason: Optional[str] = Field(default=None, description="Failure reason if not passed")
     failure_code: Optional[FailureCode] = Field(default=None)
+    diagnostic_images: Optional[Any] = Field(default=None, exclude=True)
 
 
 # ---------------------------------------------------------------------------

@@ -165,3 +165,18 @@ def test_verification_engine_escalation_and_rollback(fixtures_dir: Path):
         with pymupdf.open(stream=buf.getvalue(), filetype="pdf") as doc:
             txt = doc[0].get_text()
             assert "Deterministic Verification in Document Systems" in txt
+
+
+def test_verify_raster_footer_banner_not_falsely_occluded():
+    """Verify raster does NOT reject pages that contain dark footer/header banners (Judge 4)."""
+    img = np.full((1200, 800, 3), 255, dtype=np.uint8)
+    cv2.putText(
+        img, "Authentic Question 1: Compute force", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2
+    )
+    # Dark footer banner at bottom (y > 0.88 * H)
+    cv2.rectangle(img, (50, 1100), (750, 1180), (0, 0, 0), -1)
+
+    result = verify_raster(img, img)
+    # Must NOT fail with ERR_OPAQUE_OCCLUSION
+    assert result.failure_code != FailureCode.ERR_OPAQUE_OCCLUSION
+

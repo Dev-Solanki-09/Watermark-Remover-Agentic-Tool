@@ -123,9 +123,10 @@ def run_remover_tournament(
             )
 
     # Add alpha inversion if template is provided
-    if template is not None:
+    if template is not None and patch_tmpl is not None:
+        tmpl_arr: np.ndarray = patch_tmpl
         candidates.append(
-            (RemoverMethod.RASTER_ALPHA_INV, lambda img, m, p: raster_alpha_inv(img, patch_tmpl, m or np.zeros(img.shape[:2], dtype=np.uint8), p or RemoverParams()))
+            (RemoverMethod.RASTER_ALPHA_INV, lambda img, m, p: raster_alpha_inv(img, tmpl_arr, m or np.zeros(img.shape[:2], dtype=np.uint8), p or RemoverParams()))
         )
 
     best_method = candidates[0][0]

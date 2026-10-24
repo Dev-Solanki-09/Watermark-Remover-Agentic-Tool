@@ -63,6 +63,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Declarative steering micro-DSL override string",
     )
+    run_p.add_argument(
+        "--dewarp",
+        action="store_true",
+        default=False,
+        help="Enable zero-crop geometric dewarping and deskewing",
+    )
+
 
     # --- batch ---
     batch_p = sub.add_parser("batch", help="Process a directory of PDFs")
@@ -113,8 +120,23 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_p.add_argument("input", help="Input PDF path")
     inspect_p.add_argument("--report", default=None, help="Path for probe report JSON")
 
+    # --- dewarp ---
+    dewarp_p = sub.add_parser("dewarp", help="Geometric dewarping and zero-crop rectification")
+    dewarp_p.add_argument("input", help="Input PDF or image path")
+    dewarp_p.add_argument("-o", "--output", required=True, help="Output PDF or image path")
+    dewarp_p.add_argument(
+        "--mode",
+        choices=["auto", "skew", "gutter", "bump"],
+        default="auto",
+        help="Dewarping mode: auto (forensic gated), skew, gutter, or bump",
+    )
+    dewarp_p.add_argument("--dpi", type=int, default=150, help="Rendering DPI for PDF pages")
+    dewarp_p.add_argument("--password", default=None, help="PDF user password")
+    dewarp_p.add_argument("--report", default=None, help="Path for JSON report")
+
     # --- doctor ---
     sub.add_parser("doctor", help="Pre-flight self-diagnostics")
+
 
     # --- schema ---
     sub.add_parser("schema", help="Output JSON tool-call schema for agents")
@@ -173,6 +195,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_steer(args)
         elif args.command == "inspect":
             return _cmd_inspect(args)
+        elif args.command == "dewarp":
+            return _cmd_dewarp(args)
         elif args.command == "doctor":
             return _cmd_doctor(args)
         elif args.command == "schema":
@@ -221,7 +245,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         allow_size_growth=args.allow_size_growth,
         allow_break_signatures=args.allow_break_signatures,
         steer_dsl=getattr(args, "steer", None),
+        dewarp=getattr(args, "dewarp", False),
     )
+    return orch.execute()
+
     return orch.execute()
 
 
@@ -358,7 +385,6 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     import json
     import time
 
-    from wmclean.intelligence.gatekeeper import Gatekeeper
     from wmclean.orchestrator import Orchestrator
 
     in_path = Path(args.input)
@@ -376,15 +402,25 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     records = orch._pass1_probe(pdf)
     pdf.close()
 
-    gk = Gatekeeper()
-    plans = gk.plan_document(records, reservoir=getattr(orch, "reservoir", None))
+    from wmclean.analysis.forensic_analyzer import ForensicAnalyzer
+    from wmclean.router.intelligent_router import IntelligentRouter
+
+    analyzer = ForensicAnalyzer()
+    dossier = analyzer.analyze_document(
+        records,
+        pdf_path=str(in_path),
+        reservoir=getattr(orch, "reservoir", None),
+        subdoc_templates=getattr(orch, "subdoc_templates", None),
+    )
+    router = IntelligentRouter()
+    decision, plans = router.route_document(records, dossier=dossier)
     elapsed = time.monotonic() - t0
 
     num_pages = len(records)
-    subdoc_count = len(set(p.subdoc_id for p in plans)) if plans else 1
+    subdoc_count = len(dossier.subdocs)
 
     print(
-        f"WMCLEAN PLAN | {in_path.name} ({num_pages} pages, {subdoc_count} sub-docs) | est_time={elapsed:.1f}s | llm_tokens=0"
+        f"WMCLEAN PLAN | {in_path.name} ({num_pages} pages, {subdoc_count} sub-docs) | completeness={dossier.overall_completeness:.2f} | est_time={elapsed:.1f}s | llm_tokens={dossier.tokens_consumed}"
     )
 
     def _task_summary(plan, rec) -> str:
@@ -458,11 +494,138 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dewarp(args: argparse.Namespace) -> int:
+    """Execute standalone geometric dewarping and zero-crop rectification."""
+    import json
+
+    import cv2
+    import numpy as np
+
+    in_path = Path(args.input)
+    if not in_path.exists():
+        print(f"Error: input file {in_path} does not exist", file=sys.stderr)
+        return 40
+
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    from wmclean.geometry.dewarp import dewarp_page
+    from wmclean.geometry.probe_geom import probe_page_geometry
+    from wmclean.schemas import GeometricModality
+
+    ext = in_path.suffix.lower()
+    if ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"):
+        img = cv2.imread(str(in_path))
+        if img is None:
+            print(f"Error: failed to decode image {in_path}", file=sys.stderr)
+            return 40
+
+        probe = None
+        if getattr(args, "mode", "auto") != "auto":
+            forced_modality = {
+                "skew": GeometricModality.GEOM_SKEW_RIGID,
+                "gutter": GeometricModality.GEOM_GUTTER_CURVE,
+                "bump": GeometricModality.GEOM_WAVY_BUMP,
+            }.get(args.mode, GeometricModality.GEOM_FLAT)
+            probe = probe_page_geometry(img)
+            probe.modality = forced_modality
+
+        rectified, res = dewarp_page(img, probe=probe)
+        cv2.imwrite(str(out_path), rectified)
+
+        rep = res.model_dump()
+        rep["input"] = str(in_path)
+        rep["output"] = str(out_path)
+        if getattr(args, "report", None):
+            Path(args.report).write_text(json.dumps(rep, indent=2), encoding="utf-8")
+        print(
+            f"DEWARP: {in_path.name} -> {out_path.name} | {res.modality.value} | applied={res.applied} in {res.processing_ms}ms"
+        )
+        return 0
+
+    import fitz  # PyMuPDF
+
+    try:
+        doc = fitz.open(str(in_path))
+    except Exception as exc:
+        print(f"Error opening PDF: {exc}", file=sys.stderr)
+        return 30
+
+    if doc.is_encrypted:
+        if getattr(args, "password", None):
+            doc.authenticate(args.password)
+        else:
+            doc.close()
+            return 20
+
+    out_pdf = fitz.open()
+    dpi = getattr(args, "dpi", 150)
+    page_reports = []
+
+    for p_idx in range(len(doc)):
+        page = doc[p_idx]
+        pix = page.get_pixmap(dpi=dpi)
+        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
+        if pix.n >= 4:
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+        elif pix.n == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+        probe = None
+        if getattr(args, "mode", "auto") != "auto":
+            forced_modality = {
+                "skew": GeometricModality.GEOM_SKEW_RIGID,
+                "gutter": GeometricModality.GEOM_GUTTER_CURVE,
+                "bump": GeometricModality.GEOM_WAVY_BUMP,
+            }.get(args.mode, GeometricModality.GEOM_FLAT)
+            probe = probe_page_geometry(img)
+            probe.modality = forced_modality
+
+        rectified, res = dewarp_page(img, probe=probe)
+        page_reports.append(res.model_dump())
+
+        rect_h, rect_w = rectified.shape[:2]
+        w_pt = rect_w * 72.0 / dpi
+        h_pt = rect_h * 72.0 / dpi
+        new_page = out_pdf.new_page(width=w_pt, height=h_pt)
+        is_success, buffer = cv2.imencode(".png", rectified)
+        if is_success:
+            new_page.insert_image(fitz.Rect(0, 0, w_pt, h_pt), stream=buffer.tobytes())
+
+    doc.close()
+    out_pdf.save(str(out_path))
+    out_pdf.close()
+
+    if getattr(args, "report", None):
+        rep_data = {
+            "input": str(in_path),
+            "output": str(out_path),
+            "pages": page_reports,
+        }
+        Path(args.report).write_text(json.dumps(rep_data, indent=2), encoding="utf-8")
+
+    applied_count = sum(1 for r in page_reports if r["applied"])
+    print(
+        f"DEWARP: {in_path.name} -> {out_path.name} | pages={len(page_reports)} | rectified={applied_count}"
+    )
+    return 0
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Pre-flight self-diagnostics."""
     import sqlite3
 
-    from wmclean.deps import has_doxapy, has_pymatting, has_rapidocr, has_scipy, has_skimage
+    from wmclean.deps import (
+        has_deskew,
+        has_doxapy,
+        has_fonttools,
+        has_page_dewarp,
+        has_pymatting,
+        has_rapidocr,
+        has_scipy,
+        has_skan,
+        has_skimage,
+    )
 
     passes = []
 
@@ -495,8 +658,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         sota_status.append("scikit-image")
     if has_doxapy():
         sota_status.append("doxapy")
-    from wmclean.deps import has_fonttools, has_skan
-
     if has_fonttools():
         sota_status.append("fonttools")
     if has_skan():
@@ -505,12 +666,20 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         sota_status.append("pymatting")
     if has_rapidocr():
         sota_status.append("rapidocr")
+    if has_deskew():
+        sota_status.append("deskew")
+    if has_page_dewarp():
+        sota_status.append("page_dewarp")
     passes.append(
         f"[PASS] SOTA extensions active: {', '.join(sota_status) if sota_status else 'none'}"
     )
 
     # Optional remover availability breakdown
     passes.append("[INFO] Optional remover capabilities:")
+    passes.append(
+        f"  - Zero-crop geometric dewarping: {'AVAILABLE' if (has_deskew() or has_page_dewarp()) else 'FALLBACK (native OpenCV/NumPy)'}"
+    )
+
     passes.append(
         f"  - Closed-form alpha matting (raster_alpha_matting): {'AVAILABLE (pymatting)' if has_pymatting() else 'UNAVAILABLE (pip install pymatting)'}"
     )
@@ -582,7 +751,7 @@ def _cmd_schema(args: argparse.Namespace) -> int:
             "properties": {
                 "command": {
                     "type": "string",
-                    "enum": ["run", "batch", "plan", "doctor", "schema"],
+                    "enum": ["run", "batch", "plan", "peek", "steer", "dewarp", "doctor", "schema", "bench"],
                     "description": "Subcommand to execute",
                 },
                 "input": {
@@ -604,6 +773,10 @@ def _cmd_schema(args: argparse.Namespace) -> int:
                 "resume": {
                     "type": "boolean",
                     "description": "Resume from checkpoint state",
+                },
+                "dewarp": {
+                    "type": "boolean",
+                    "description": "Enable zero-crop geometric dewarping and deskewing pre-filter",
                 },
             },
             "required": ["command", "input", "output"],

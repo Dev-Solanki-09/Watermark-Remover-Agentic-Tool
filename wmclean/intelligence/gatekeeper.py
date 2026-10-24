@@ -318,7 +318,9 @@ class Gatekeeper:
                         )
                     )
             elif (
-                len(subdoc_records) <= 2
+                not cluster_has_chroma
+                and not cluster_has_template
+                and (len(subdoc_records) <= 2 or record.kind in (PageKind.SCAN, PageKind.SCAN_OCR))
                 and CarrierFlag.RASTER_BAKED in carrier_set
                 and not ras.is_bitonal
             ):

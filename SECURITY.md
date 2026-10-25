@@ -1,14 +1,5 @@
 # Security Policy
 
-## Supported Versions
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.0.1-beta (0.0.1b0) | :white_check_mark: |
-| < 0.0.1b0            | :x:                |
-
----
-
 ## Reporting a Vulnerability
 
 We take the security of PDF parsing and processing very seriously. PDFs are complex, untrusted binary formats that can contain deeply nested objects, malicious stream compressions, or corrupt cross-reference tables.

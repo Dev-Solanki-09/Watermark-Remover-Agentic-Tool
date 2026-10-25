@@ -20,7 +20,10 @@ import pikepdf
 from wmclean.schemas import (
     CountsReport,
     DocumentReport,
+    ExecutionMode,
+    ExecutionPolicy,
     ExitCode,
+    PageKind,
     PageReport,
     PageState,
     PerfReport,
@@ -46,6 +49,7 @@ class Orchestrator:
         allow_break_signatures: bool = True,
         steer_dsl: Optional[str] = None,
         dewarp: bool = False,
+        mode: ExecutionMode | str = ExecutionMode.ADAPTIVE,
     ):
         self.input_path = Path(input_path)
         self.output_path = Path(output_path)
@@ -59,6 +63,23 @@ class Orchestrator:
         self.dewarp = dewarp
         self.llm_call_count: int = 0
 
+        # Mode configuration & execution policy
+        if isinstance(mode, str):
+            try:
+                self.mode = ExecutionMode(mode.lower())
+            except ValueError:
+                self.mode = ExecutionMode.ADAPTIVE
+        else:
+            self.mode = mode
+        self.policy = ExecutionPolicy.for_mode(self.mode)
+
+        # In FAST mode, strictly forbid ML and LLM calls
+        if not self.policy.allow_llm:
+            self.enable_ml = False
+
+        # Crash-safe checkpoint file paths
+        self.state_file = self.output_path.with_name(f"{self.output_path.name}.wmclean_state.json")
+        self.ckpt_pdf_file = self.output_path.with_name(f"{self.output_path.name}.ckpt.pdf")
 
     def execute(self) -> int:
         """Run the full pipeline. Returns exit code."""
@@ -70,29 +91,62 @@ class Orchestrator:
         except PasswordError:
             self._emit_stdout("UNSUPPORTED", ExitCode.UNSUPPORTED, "ERR_ENCRYPTED")
             return ExitCode.UNSUPPORTED.value
+        except SignatureProtectedError:
+            self._emit_stdout("UNSUPPORTED", ExitCode.UNSUPPORTED, "ERR_SIGNATURE_PROTECTED")
+            return ExitCode.UNSUPPORTED.value
         except CorruptError:
             self._emit_stdout("CORRUPT", ExitCode.CORRUPT, "ERR_CORRUPT_PDF")
             return ExitCode.CORRUPT.value
 
-        # --- Pass 1: Probe → Cluster → Route ---
-        probe_records = self._pass1_probe(pdf)
-        clusters, router_decision = self._pass1_cluster_and_route(probe_records)
+        try:
+            # --- Pass 1: Probe → Cluster → Route ---
+            probe_records = self._pass1_probe(pdf)
+            clusters, router_decision = self._pass1_cluster_and_route(probe_records)
 
-        # --- Pass 2: Remove → Verify → Assemble ---
-        page_reports = self._pass2_process(pdf, probe_records, router_decision)
+            # --- Pass 2: Remove → Verify → Assemble ---
+            page_reports = self._pass2_process(pdf, probe_records, router_decision)
 
-        # --- Save output atomically ---
-        all_untouched = all(pr.st == PageState.UNTOUCHED for pr in page_reports)
-        tmp_out = self.output_path.with_name(f"{self.output_path.name}.tmp.{os.getpid()}")
-        if all_untouched and self.input_path.resolve() != self.output_path.resolve():
-            import shutil
+            # --- Save output atomically ---
+            all_untouched = all(pr.st == PageState.UNTOUCHED for pr in page_reports)
+            tmp_out = self.output_path.with_name(f"{self.output_path.name}.tmp.{os.getpid()}")
+            if all_untouched and self.input_path.resolve() != self.output_path.resolve():
+                import shutil
 
-            pdf.close()
-            shutil.copy2(str(self.input_path), str(tmp_out))
-        else:
-            pdf.save(str(tmp_out))
-            pdf.close()
-        os.replace(tmp_out, self.output_path)
+                pdf.close()
+                shutil.copy2(str(self.input_path), str(tmp_out))
+            else:
+                pdf.save(str(tmp_out))
+                pdf.close()
+            os.replace(tmp_out, self.output_path)
+        finally:
+            try:
+                pdf.close()
+            except Exception:
+                pass
+
+        # --- Check size growth limit ---
+        in_size = self.input_path.stat().st_size
+        out_size = self.output_path.stat().st_size if self.output_path.exists() else 0
+        if not self.allow_size_growth and in_size > 0 and out_size > (in_size * 1.30):
+            logger.warning(
+                "Output size %.2fMB exceeds 1.3x input size %.2fMB; applying stream compression",
+                out_size / 1e6,
+                in_size / 1e6,
+            )
+            try:
+                with pikepdf.open(str(self.output_path), allow_overwriting_input=True) as opt_pdf:
+                    opt_pdf.save(
+                        str(self.output_path),
+                        compress_streams=True,
+                        object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                    )
+            except Exception as exc:
+                logger.debug("Failed compressing oversized output PDF: %s", exc)
+
+        # Cleanup resume checkpoint files on successful run
+        if self.resume:
+            self.state_file.unlink(missing_ok=True)
+            self.ckpt_pdf_file.unlink(missing_ok=True)
 
         # --- Compute results ---
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -109,17 +163,60 @@ class Orchestrator:
         return exit_code.value
 
     def _open_pdf(self) -> pikepdf.Pdf:
-        """Open input PDF, handling encryption and corruption."""
-        try:
-            return pikepdf.open(
-                str(self.input_path),
-                password=self.password or "",
-                attempt_recovery=True,
-            )
-        except pikepdf.PasswordError:
-            raise PasswordError(f"Encrypted PDF requires password: {self.input_path}")
-        except pikepdf.PdfError as exc:
-            raise CorruptError(f"Corrupt PDF: {self.input_path}: {exc}")
+        """Open input PDF, handling encryption, signatures, corruption, and crash-safe resume."""
+        pdf = None
+        if self.resume and self.ckpt_pdf_file.exists() and self.state_file.exists():
+            try:
+                pdf = pikepdf.open(
+                    str(self.ckpt_pdf_file),
+                    password=self.password or "",
+                    attempt_recovery=True,
+                )
+                logger.info("Resuming from checkpoint PDF: %s", self.ckpt_pdf_file)
+            except Exception as exc:
+                logger.warning("Failed opening checkpoint PDF, falling back to input: %s", exc)
+                pdf = None
+
+        if pdf is None:
+            try:
+                pdf = pikepdf.open(
+                    str(self.input_path),
+                    password=self.password or "",
+                    attempt_recovery=True,
+                )
+            except pikepdf.PasswordError:
+                raise PasswordError(f"Encrypted PDF requires password: {self.input_path}")
+            except pikepdf.PdfError as exc:
+                raise CorruptError(f"Corrupt PDF: {self.input_path}: {exc}")
+
+        # Signature protection verification
+        if not self.allow_break_signatures:
+            has_sig = False
+            try:
+                if "/AcroForm" in pdf.Root and "/Fields" in pdf.Root.AcroForm:
+                    for f in pdf.Root.AcroForm.Fields:
+                        if f.get("/FT") == pikepdf.Name.Sig:
+                            has_sig = True
+                            break
+                if not has_sig:
+                    for p in pdf.pages:
+                        if "/Annots" in p:
+                            for a in p.Annots:
+                                if a.get("/FT") == pikepdf.Name.Sig or (
+                                    a.get("/Subtype") == pikepdf.Name.Widget
+                                    and a.get("/FT") == pikepdf.Name.Sig
+                                ):
+                                    has_sig = True
+                                    break
+            except Exception:
+                pass
+            if has_sig:
+                pdf.close()
+                raise SignatureProtectedError(
+                    f"PDF contains digital signatures and allow_break_signatures=False: {self.input_path}"
+                )
+
+        return pdf
 
     def _pass1_probe(self, pdf: pikepdf.Pdf) -> list:
         """L0: Probe all pages. Returns list of ProbeRecords."""
@@ -272,14 +369,15 @@ class Orchestrator:
             subdoc_templates=getattr(self, "subdoc_templates", None),
         )
 
-        # Gated Vision / LLM fallback ONLY if information is lacking / ambiguous
-        if dossier.ambiguous_subdoc_count > 0 and self.enable_ml:
+        # Gated Vision / LLM fallback ONLY if information is lacking / ambiguous and policy permits LLM
+        if dossier.ambiguous_subdoc_count > 0 and self.enable_ml and self.policy.allow_llm:
             bridge = VisionBridge()
             dossier = bridge.resolve_ambiguities(
                 dossier=dossier,
                 pdf_path=str(self.input_path),
                 password=self.password,
             )
+            self.llm_call_count += 1
 
         self.dossier = dossier
 
@@ -543,14 +641,80 @@ class Orchestrator:
                     th = int(h_pt * 150.0 / 72.0)
                     tmpl = self.reservoir.get_template(tw, th)
 
+            known_texts: list[str] = []
+            if action and action.params and action.params.target_texts:
+                known_texts.extend(action.params.target_texts)
+            if page_plan and page_plan.tasks:
+                for t in page_plan.tasks:
+                    if t.params and t.params.target_texts:
+                        known_texts.extend(t.params.target_texts)
+            if record.text_cand:
+                known_texts.extend([c.norm_str for c in record.text_cand if c.norm_str])
+
             state, applied, v_result = engine.apply_with_rollback(
                 pdf=pdf,
                 page_idx=i,
                 page_kind=record.kind,
                 remover_funcs=chain_funcs,
-                known_wm_texts=action.params.target_texts if (action and action.params) else None,
+                known_wm_texts=known_texts if known_texts else None,
                 template=tmpl,
+                dewarp=self.dewarp,
             )
+
+            # Mode 4: HYBRID — Multi-strategy candidate competition
+            if (
+                self.mode == ExecutionMode.HYBRID
+                and not matching_steer
+                and state not in (PageState.CLEAN_EXACT, PageState.UNTOUCHED)
+            ):
+                candidate_chains: list[
+                    list[tuple[RemoverMethod, Any, RemoverParams, Optional[tuple[int, int, int, int]]]]
+                ] = []
+                if record.kind == PageKind.VECTOR:
+                    candidate_chains.append(
+                        [(RemoverMethod.AST_TJ_REASSEMBLE, ast_tj_reassemble, default_params, None)]
+                    )
+                    candidate_chains.append(
+                        [(RemoverMethod.MUPDF_LAYER_REDACT, mupdf_layer_redact, default_params, None)]
+                    )
+                else:
+                    candidate_chains.append(
+                        [(RemoverMethod.POINTWISE_HUE_AND_LUT, pointwise_hue_and_lut, default_params, None)]
+                    )
+                    candidate_chains.append(
+                        [(RemoverMethod.DENSITY_SUB, density_sub, default_params, None)]
+                    )
+                    candidate_chains.append(
+                        [(RemoverMethod.BILINGUAL_TWIN_CLONE, bilingual_twin_clone, default_params, None)]
+                    )
+
+                best_state: PageState = state
+                best_applied = applied
+                best_res = v_result
+
+                for alt_chain in candidate_chains:
+                    c_state, c_applied, c_res = engine.apply_with_rollback(
+                        pdf=pdf,
+                        page_idx=i,
+                        page_kind=record.kind,
+                        remover_funcs=alt_chain,
+                        known_wm_texts=action.params.target_texts
+                        if (action and action.params)
+                        else None,
+                        template=tmpl,
+                        dewarp=self.dewarp,
+                    )
+                    if c_res.passed and c_res.content_loss == 0.0:
+                        if not best_res.passed or c_res.residual < best_res.residual:
+                            best_state = c_state
+                            best_applied = c_applied
+                            best_res = c_res
+                            if best_state == PageState.CLEAN_EXACT:
+                                break
+
+                state = best_state
+                applied = best_applied
+                v_result = best_res
 
             crop_path: Optional[str] = None
             if state in (PageState.FLAGGED, PageState.UNVERIFIED):
@@ -591,15 +755,22 @@ class Orchestrator:
             if self.resume:
                 saved_state[str(p_num)] = pr.model_dump()
                 try:
-                    state_file.write_text(json.dumps(saved_state), encoding="utf-8")
-                except Exception:
-                    pass
+                    tmp_state = self.state_file.with_name(f"{self.state_file.name}.tmp.{os.getpid()}")
+                    tmp_state.write_text(json.dumps(saved_state, indent=2), encoding="utf-8")
+                    os.replace(tmp_state, self.state_file)
 
-        if self.resume and state_file.exists():
-            try:
-                state_file.unlink()
-            except Exception:
-                pass
+                    tmp_ckpt = self.ckpt_pdf_file.with_name(
+                        f"{self.ckpt_pdf_file.name}.tmp.{os.getpid()}"
+                    )
+                    pdf.save(str(tmp_ckpt))
+                    os.replace(tmp_ckpt, self.ckpt_pdf_file)
+                except Exception as exc:
+                    logger.debug("Failed saving checkpoint for page %d: %s", p_num, exc)
+
+            # Free memory explicitly per page for low-spec dual-core/4GB systems
+            import gc
+
+            gc.collect()
 
         return page_reports
 
@@ -641,6 +812,7 @@ class Orchestrator:
 
         report = DocumentReport.model_validate(
             {
+                "mode": self.mode,
                 "in": str(self.input_path),
                 "out": str(self.output_path),
                 "sha256_in": self._file_sha256(self.input_path),
@@ -755,3 +927,7 @@ class PasswordError(Exception):
 
 class CorruptError(Exception):
     """Raised when PDF is unrecoverably corrupt."""
+
+
+class SignatureProtectedError(Exception):
+    """Raised when PDF contains digital signatures and allow_break_signatures=False."""

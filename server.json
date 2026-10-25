@@ -3,7 +3,7 @@
   "name": "io.github.dev-solanki-09/watermark-remover-mcp",
   "title": "Watermark Remover MCP Server",
   "description": "Universal forensic watermark, stamp, seal, and background overlay remover for PDFs, scanned documents, and scientific diagrams with fail-closed topological invariance and zero-smudge alpha unmixing.",
-  "version": "1.0.0",
+  "version": "0.0.11-beta",
   "websiteUrl": "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool",
   "repository": {
     "type": "git",

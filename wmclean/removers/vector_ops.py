@@ -789,8 +789,7 @@ def ast_tj_reassemble(
         logger.debug("ast_tj_reassemble: failed to parse content stream: %s", exc)
         return 0
 
-    target_texts = [t.upper() for t in (p_params.target_texts if p_params else [])]
-    # Generic watermark keywords if no specific target texts given
+    target_texts = [t.upper() for t in (p_params.target_texts if p_params else []) if t]
     default_keywords = [
         "CONFIDENTIAL",
         "SAMPLE",
@@ -803,7 +802,9 @@ def ast_tj_reassemble(
         "TAPSCANNER",
         "TELEGRAM",
     ]
-    all_targets = target_texts + default_keywords
+    # If specific target texts were detected by probe/analyzer, strictly match those targets.
+    # Otherwise, fall back to default keywords.
+    all_targets = target_texts if target_texts else default_keywords
 
     excised_count = 0
     new_ops = []
@@ -822,7 +823,12 @@ def ast_tj_reassemble(
             in_bt = False
             current_bt_ops.append((operands, operator))
             full_text = "".join(current_bt_text).upper()
-            is_wm = any(kw in full_text for kw in all_targets) if full_text else False
+            # Watermarks are concise single strings or stamps (<= 200 chars).
+            # Legitimate academic or technical body paragraphs often discuss 'watermark' or 'draft'
+            # and must never be stripped as watermarks.
+            is_wm = False
+            if full_text and len(full_text.strip()) <= 200:
+                is_wm = any(kw in full_text for kw in all_targets)
             if is_wm:
                 excised_count += 1
                 logger.info(

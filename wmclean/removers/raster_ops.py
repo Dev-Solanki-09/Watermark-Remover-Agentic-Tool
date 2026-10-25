@@ -226,8 +226,8 @@ def raster_color_unmix(
     lab = cv2.cvtColor(page_img, cv2.COLOR_RGB2LAB).astype(np.float32)
     L = lab[:, :, 0]
 
-    # Estimate background luminance from non-watermark regions
-    bg_L = float(L[~mask_bool].mean()) if (~mask_bool).sum() > 0 else 200.0
+    # Estimate paper background luminance from non-watermark regions (95th percentile)
+    bg_L = float(np.percentile(L[~mask_bool], 95)) if (~mask_bool).sum() > 0 else 255.0
 
     # Neutralize chroma (remove colour) across watermark regions
     result_lab = lab.copy()

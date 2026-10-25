@@ -169,14 +169,14 @@ class IntelligentRouter:
             params = RemoverParams(target_texts=prof.target_texts)
             tasks.append(
                 MethodTask(
-                    method=RemoverMethod.AST_TJ_REASSEMBLE,
-                    confidence=0.94,
+                    method=RemoverMethod.TEXT_OP_STRIP,
+                    confidence=0.96,
                     params=params,
                 )
             )
             tasks.append(
                 MethodTask(
-                    method=RemoverMethod.TEXT_OP_STRIP,
+                    method=RemoverMethod.AST_TJ_REASSEMBLE,
                     confidence=0.92,
                     params=params,
                 )
@@ -238,13 +238,12 @@ class IntelligentRouter:
             tasks.append(MethodTask(method=RemoverMethod.OCG_STRIP, confidence=0.98))
 
         elif mod == WatermarkModality.SCANNER_MARGIN_BANNER:
-            ras = record.ras_stats
-            has_margin = (
-                (ras and ras.ocr_spans > 0)
-                or any(
-                    (x.bb and (x.bb[3] - x.bb[1] < 120) and (x.bb[1] < 60 or x.bb[3] > h_pt - 60))
-                    for x in record.xobj_cand
-                )
+            has_margin = any(
+                (x.bb and (x.bb[3] - x.bb[1] < 120) and (x.bb[1] < 60 or x.bb[3] > h_pt - 60))
+                for x in record.xobj_cand
+            ) or any(
+                any(kw in tc.norm_str.lower() for kw in ("camscanner", "scanned by", "tapscanner", "adobe scan"))
+                for tc in record.text_cand
             )
             if not has_margin:
                 return PageDispatchPlan(
@@ -276,25 +275,24 @@ class IntelligentRouter:
                     tasks=[],
                     reason="Negative presence veto: chromatic stamp absent on this page",
                 )
-            roi_full = (int(w_px * 0.05), int(h_px * 0.05), int(w_px * 0.95), int(h_px * 0.95))
             tasks.append(
                 MethodTask(
                     method=RemoverMethod.POINTWISE_HUE_AND_LUT,
-                    roi_bbox=roi_full,
+                    roi_bbox=None,
                     confidence=0.94,
                 )
             )
             tasks.append(
                 MethodTask(
                     method=RemoverMethod.RASTER_HUE_SELECTIVE_UNMIX,
-                    roi_bbox=roi_full,
+                    roi_bbox=None,
                     confidence=0.90,
                 )
             )
             tasks.append(
                 MethodTask(
                     method=RemoverMethod.PIRACY_OCR_SPOTTER,
-                    roi_bbox=roi_full,
+                    roi_bbox=None,
                     confidence=0.88,
                 )
             )
@@ -303,29 +301,54 @@ class IntelligentRouter:
             ras = record.ras_stats
             has_neutral_wm = (
                 ras
-                and ras.tmpl_cov >= 0.002
-                and (ras.tmpl_ncc >= 0.25 or ras.est_alpha >= 0.03 or ras.sat_p95 >= 6.0)
+                and (
+                    len(prof.page_indices) <= 2
+                    or (
+                        ras.tmpl_cov >= 0.002
+                        and (ras.tmpl_ncc >= 0.25 or ras.est_alpha >= 0.03 or ras.sat_p95 >= 6.0)
+                    )
+                )
             )
             if not has_neutral_wm:
                 return PageDispatchPlan(
                     page=p_num,
                     subdoc_id=s_id,
                     tasks=[],
-                    reason="Negative presence veto: neutral watermark absent on this page (tmpl_cov < 0.002 or tmpl_ncc < 0.25)",
+                    reason="Negative presence veto: neutral watermark absent on this page",
                 )
-            roi_full = (int(w_px * 0.05), int(h_px * 0.05), int(w_px * 0.95), int(h_px * 0.95))
+            tasks.append(
+                MethodTask(
+                    method=RemoverMethod.TWO_REGIME_FILL,
+                    roi_bbox=None,
+                    confidence=0.98,
+                )
+            )
             tasks.append(
                 MethodTask(
                     method=RemoverMethod.POINTWISE_HUE_AND_LUT,
-                    roi_bbox=roi_full,
+                    roi_bbox=None,
                     confidence=0.94,
                 )
             )
             tasks.append(
                 MethodTask(
                     method=RemoverMethod.DENSITY_SUB,
-                    roi_bbox=roi_full,
+                    roi_bbox=None,
                     confidence=0.88,
+                )
+            )
+            tasks.append(
+                MethodTask(
+                    method=RemoverMethod.RASTER_TEMPLATE_WHITEN,
+                    roi_bbox=None,
+                    confidence=0.86,
+                )
+            )
+            tasks.append(
+                MethodTask(
+                    method=RemoverMethod.RASTER_ALPHA_INV,
+                    roi_bbox=None,
+                    confidence=0.84,
                 )
             )
 

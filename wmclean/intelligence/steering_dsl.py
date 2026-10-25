@@ -38,7 +38,11 @@ NAMED_ZONES: dict[str, tuple[float, float, float, float]] = {
     "center": (0.12, 0.18, 0.88, 0.82),
     "col-left": (0.0, 0.08, 0.50, 0.92),
     "col-right": (0.50, 0.08, 1.0, 0.92),
-    "margins": (0.0, 0.0, 1.0, 1.0),
+    "margins": (0.0, 0.0, 1.0, 0.12),
+    "margin-top": (0.0, 0.0, 1.0, 0.12),
+    "margin-bottom": (0.0, 0.88, 1.0, 1.0),
+    "margin-left": (0.0, 0.0, 0.12, 1.0),
+    "margin-right": (0.88, 0.0, 1.0, 1.0),
 }
 
 # Alias mapping for friendly short names in DSL
@@ -63,11 +67,14 @@ METHOD_ALIASES: dict[str, str] = {
     "mupdf_redact": RemoverMethod.MUPDF_LAYER_REDACT.value,
     "font_zero": RemoverMethod.FONT_TABLE_ZERO.value,
     "text_op_strip": RemoverMethod.TEXT_OP_STRIP.value,
+    "strip_text": RemoverMethod.TEXT_OP_STRIP.value,
+    "text_strip": RemoverMethod.TEXT_OP_STRIP.value,
     "ast_tj": RemoverMethod.AST_TJ_REASSEMBLE.value,
     "annot_del": RemoverMethod.ANNOT_DEL.value,
     "ocg_strip": RemoverMethod.OCG_STRIP.value,
     "lama": RemoverMethod.SURGICAL_LAMA.value,
 }
+
 
 
 @dataclass
@@ -214,9 +221,19 @@ def parse_steer_dsl(
 
     raw_rules = [r.strip() for r in dsl_text.split(";") if r.strip()]
 
+    valid_actions = {
+        "skip",
+        "restore_original",
+        "protect_zone",
+        "shield",
+        "auto_solve",
+        *(m.value for m in RemoverMethod),
+        *METHOD_ALIASES.keys(),
+    }
+
     for raw in raw_rules:
         if ":" not in raw:
-            continue
+            raise ValueError(f"Invalid steering DSL syntax (missing ':' in rule): '{raw}'")
         left, right = raw.split(":", 1)
         left = left.strip()
         right = right.strip()
@@ -246,6 +263,13 @@ def parse_steer_dsl(
                 params = _parse_params_str(p_content)
 
             canonical_name = METHOD_ALIASES.get(action_name.lower(), action_name)
+            if (
+                action_name.lower() not in valid_actions
+                and canonical_name not in valid_actions
+            ):
+                raise ValueError(
+                    f"Unknown steering action '{action_name}'. Must be one of: {sorted(valid_actions)}"
+                )
             actions.append(SteerAction(name=canonical_name, params=params))
 
         if actions:
@@ -255,3 +279,4 @@ def parse_steer_dsl(
 
 
 parse_steering_dsl = parse_steer_dsl
+

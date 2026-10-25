@@ -124,6 +124,7 @@ class VerificationEngine:
         known_wm_texts: Optional[list[str]] = None,
         template: Optional[np.ndarray] = None,
         roi_bbox: Optional[tuple[int, int, int, int]] = None,
+        dewarp: bool = False,
     ) -> tuple[PageState, list[str], VerifyResult]:
         """Apply a sequence of candidate removers with verification gates and rollback.
 
@@ -149,6 +150,7 @@ class VerificationEngine:
         last_result = VerifyResult(passed=False, reason="No removers executed")
 
         for item in remover_funcs:
+            page = pdf.pages[page_idx]
             if len(item) == 4:
                 method, func, params, item_roi = item
             else:
@@ -193,6 +195,13 @@ class VerificationEngine:
                             orig_arr = orig_arr[:, :, :3]
                         elif pix.n == 1:
                             orig_arr = np.stack([orig_arr, orig_arr, orig_arr], axis=2)
+
+                    if dewarp:
+                        try:
+                            from wmclean.geometry.dewarp import dewarp_page
+                            orig_arr, _ = dewarp_page(orig_arr)
+                        except Exception as exc:
+                            logger.debug("Dewarp failed on page %d: %s", page_idx + 1, exc)
 
                     # Compute mask depending on remover
                     h, w = orig_arr.shape[:2]
@@ -320,11 +329,15 @@ class VerificationEngine:
                         )
                         continue
 
-                    wm_mask_eval = c_diff
+                    wm_mask_eval = mask if mask is not None else target_wm_mask
 
                     any_modification_attempted = True
                     v_result = verify_raster(
-                        orig_arr, cleaned_arr, wm_mask=wm_mask_eval, template=template
+                        orig_arr,
+                        cleaned_arr,
+                        wm_mask=wm_mask_eval,
+                        template=template,
+                        enforce_four_invariants=True,
                     )
                     if v_result.passed:
                         # Find primary full-page scan Image XObject to update (avoids corrupting secondary logos/icons)
@@ -351,7 +364,15 @@ class VerificationEngine:
                         )
                         last_result = v_result
                         last_result.diagnostic_images = (orig_arr.copy(), cleaned_arr.copy())
-                        self._rollback_page(pdf, page, orig_contents_bytes, orig_annots_copy)
+                        self._rollback_page(
+                            pdf,
+                            page,
+                            orig_contents_bytes,
+                            orig_annots_copy,
+                            page_idx=page_idx,
+                            orig_pdf_copy=orig_pdf_copy,
+                        )
+                        page = pdf.pages[page_idx]
                         continue
 
                 # Vector remover execution
@@ -394,7 +415,7 @@ class VerificationEngine:
                     pdf,
                     page_idx,
                     mask_bbox=mask_bbox,
-                    known_wm_texts=known_wm_texts,
+                    known_wm_texts=known_wm_texts or (params.target_texts if params else None),
                 )
 
                 if v_result.passed:
@@ -416,7 +437,15 @@ class VerificationEngine:
                         v_result.failure_code,
                     )
                     last_result = v_result
-                    self._rollback_page(pdf, page, orig_contents_bytes, orig_annots_copy)
+                    self._rollback_page(
+                        pdf,
+                        page,
+                        orig_contents_bytes,
+                        orig_annots_copy,
+                        page_idx=page_idx,
+                        orig_pdf_copy=orig_pdf_copy,
+                    )
+                    page = pdf.pages[page_idx]
 
             except Exception as exc:
                 logger.warning(
@@ -430,7 +459,15 @@ class VerificationEngine:
                     failure_code=FailureCode.ERR_VEC_VERIFY_BREACH,
                     reason=f"Remover exception: {exc}",
                 )
-                self._rollback_page(pdf, page, orig_contents_bytes, orig_annots_copy)
+                self._rollback_page(
+                    pdf,
+                    page,
+                    orig_contents_bytes,
+                    orig_annots_copy,
+                    page_idx=page_idx,
+                    orig_pdf_copy=orig_pdf_copy,
+                )
+                page = pdf.pages[page_idx]
 
         # Multi-remover cumulative cascade pass for multi-watermarked raster pages
         raster_methods = [
@@ -555,8 +592,8 @@ class VerificationEngine:
                 else cascade_arr
             )
             c_diff = cv2.absdiff(orig_g, casc_g) > 8
-            wm_mask_eval = c_diff
-            v_res = verify_raster(orig_arr, cascade_arr, wm_mask=wm_mask_eval, template=template)
+            casc_mask: Optional[np.ndarray] = c_diff
+            v_res = verify_raster(orig_arr, cascade_arr, wm_mask=casc_mask, template=template)
             if v_res.passed:
                 target_img = _find_primary_image_xobject(page)
                 if target_img:
@@ -574,7 +611,14 @@ class VerificationEngine:
 
         orig_pdf_copy.close()
         # If all removers failed verification, leave page completely untouched
-        self._rollback_page(pdf, page, orig_contents_bytes, orig_annots_copy)
+        self._rollback_page(
+            pdf,
+            page,
+            orig_contents_bytes,
+            orig_annots_copy,
+            page_idx=page_idx,
+            orig_pdf_copy=orig_pdf_copy,
+        )
         if not any_modification_attempted and not remover_funcs:
             return (
                 PageState.UNTOUCHED,
@@ -602,8 +646,17 @@ class VerificationEngine:
         page: pikepdf.Page,
         orig_contents: bytes,
         orig_annots: Optional[pikepdf.Array],
+        page_idx: Optional[int] = None,
+        orig_pdf_copy: Optional[pikepdf.Pdf] = None,
     ) -> None:
-        """Roll back page contents and annotations to snapshot."""
+        """Full transactional rollback: restores the entire page dictionary from snapshot."""
+        if orig_pdf_copy is not None and page_idx is not None and page_idx < len(orig_pdf_copy.pages):
+            try:
+                pdf.pages[page_idx] = pikepdf.Page(pdf.copy_foreign(orig_pdf_copy.pages[page_idx].obj))
+                return
+            except Exception as exc:
+                logger.debug("Transactional copy_foreign rollback fallback: %s", exc)
+
         if orig_contents:
             page.Contents = pdf.make_stream(orig_contents)
         elif "/Contents" in page:

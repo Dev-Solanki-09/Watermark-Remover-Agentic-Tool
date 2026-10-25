@@ -188,8 +188,8 @@ class ForensicAnalyzer:
                 is_ambiguous=False,
                 target_texts=norm_texts,
                 recommended_chain=[
-                    RemoverMethod.AST_TJ_REASSEMBLE,
                     RemoverMethod.TEXT_OP_STRIP,
+                    RemoverMethod.AST_TJ_REASSEMBLE,
                 ],
             )
 
@@ -306,10 +306,13 @@ class ForensicAnalyzer:
 
             # 4. Check for scanner margin banner (CamScanner, TapScanner, footer stamps)
             has_margin = any(
-                (r.ras_stats and r.ras_stats.ocr_spans > 0)
-                or any(
+                any(
                     x.bb and (x.bb[3] - x.bb[1] < 120) and (x.bb[1] < 60 or x.bb[3] > 700)
                     for x in r.xobj_cand
+                )
+                or any(
+                    any(kw in tc.norm_str.lower() for kw in ("camscanner", "scanned by", "tapscanner", "adobe scan"))
+                    for tc in r.text_cand
                 )
                 for r in subdoc_records
             )
@@ -325,9 +328,9 @@ class ForensicAnalyzer:
                 )
 
             # 5. Scanned paper with continuous-tone faint neutral gray watermark
-            # (e.g. phy target.pdf pages 9-14 where watermark is achromatic mid-gray)
+            # (e.g. phy target.pdf pages 9-14 where watermark is achromatic mid-gray, or 1-2 page scans)
             if dominant_kind in (PageKind.SCAN, PageKind.SCAN_OCR) and (
-                max_cov >= 0.002 or max_alpha > 0.03 or max_ncc >= 0.20
+                max_cov >= 0.002 or max_alpha > 0.03 or max_ncc >= 0.20 or len(subdoc_records) <= 2
             ):
                 lut_params = {
                     "black_point": 85,
@@ -345,8 +348,11 @@ class ForensicAnalyzer:
                     is_ambiguous=False,
                     lut_params=lut_params,
                     recommended_chain=[
+                        RemoverMethod.TWO_REGIME_FILL,
                         RemoverMethod.POINTWISE_HUE_AND_LUT,
                         RemoverMethod.DENSITY_SUB,
+                        RemoverMethod.RASTER_TEMPLATE_WHITEN,
+                        RemoverMethod.RASTER_ALPHA_INV,
                     ],
                 )
 

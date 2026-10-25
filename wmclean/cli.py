@@ -69,7 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable zero-crop geometric dewarping and deskewing",
     )
-
+    run_p.add_argument(
+        "--mode",
+        choices=["fast", "accurate", "adaptive", "hybrid"],
+        default="adaptive",
+        help="Execution mode: fast, accurate, adaptive (default), or hybrid",
+    )
 
     # --- batch ---
     batch_p = sub.add_parser("batch", help="Process a directory of PDFs")
@@ -82,9 +87,33 @@ def _build_parser() -> argparse.ArgumentParser:
     batch_p.add_argument("--enable-ml-fallback", action="store_true")
     batch_p.add_argument("--allow-size-growth", action="store_true")
     batch_p.add_argument(
+        "--allow-break-signatures",
+        action="store_true",
+        default=True,
+        help="Strip invalidated /Sig fields (default: true)",
+    )
+    batch_p.add_argument(
         "--steer",
         default=None,
         help="Declarative steering micro-DSL override string",
+    )
+    batch_p.add_argument(
+        "--mode",
+        choices=["fast", "accurate", "adaptive", "hybrid"],
+        default="adaptive",
+        help="Execution mode: fast, accurate, adaptive (default), or hybrid",
+    )
+    batch_p.add_argument(
+        "--recursive",
+        "-r",
+        action="store_true",
+        help="Recursively search input_dir for PDFs",
+    )
+    batch_p.add_argument(
+        "--dewarp",
+        action="store_true",
+        default=False,
+        help="Enable zero-crop geometric dewarping and deskewing",
     )
 
     # --- plan ---
@@ -243,19 +272,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
         resume=args.resume,
         enable_ml=args.enable_ml_fallback,
         allow_size_growth=args.allow_size_growth,
-        allow_break_signatures=args.allow_break_signatures,
+        allow_break_signatures=getattr(args, "allow_break_signatures", True),
         steer_dsl=getattr(args, "steer", None),
         dewarp=getattr(args, "dewarp", False),
+        mode=getattr(args, "mode", "adaptive"),
     )
-    return orch.execute()
-
     return orch.execute()
 
 
 def _cmd_batch(args: argparse.Namespace) -> int:
-    """Execute batch directory processing."""
-    from wmclean.orchestrator import Orchestrator
+    """Execute batch directory processing with bounded parallel workers and aggregate report."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    from wmclean.orchestrator import Orchestrator
+    from wmclean.schemas import BatchFileSummary, BatchReport, CountsReport, ExecutionMode
+
+    t_start = time.monotonic()
     in_dir = Path(args.input_dir)
     out_dir = Path(args.output_dir)
     if not in_dir.exists() or not in_dir.is_dir():
@@ -263,45 +296,160 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         return 40
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_files = sorted(list(in_dir.glob("*.pdf")))
+
+    # File discovery (case-insensitive, optional recursive)
+    pdf_set = set()
+    patterns = ["*.pdf", "*.PDF"]
+    if getattr(args, "recursive", False):
+        patterns = ["**/*.pdf", "**/*.PDF"]
+
+    for pat in patterns:
+        for p in in_dir.glob(pat):
+            if p.is_file():
+                pdf_set.add(p)
+
+    pdf_files = sorted(list(pdf_set))
     if not pdf_files:
         print(f"No PDF files found in {in_dir}")
         return 0
 
     total = len(pdf_files)
+    file_summaries: list[BatchFileSummary] = []
     successes = 0
     partials = 0
+    unverifieds = 0
     errors = 0
 
-    for pdf_path in pdf_files:
-        out_path = out_dir / pdf_path.name
-        report_path = out_dir / f"{pdf_path.stem}.report.json" if args.report else None
+
+    mode_str = getattr(args, "mode", "adaptive")
+    # Low-spec safeguard: bound workers to at most 2 on dual-core CPU / 4GB RAM
+    max_workers = max(1, min(getattr(args, "workers", 1), 2))
+
+    def _process_one(pdf_path: Path) -> BatchFileSummary:
+        f_t0 = time.monotonic()
+        if getattr(args, "recursive", False):
+            try:
+                rel = pdf_path.relative_to(in_dir)
+                out_path = out_dir / rel
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                out_path = out_dir / pdf_path.name
+        else:
+            out_path = out_dir / pdf_path.name
+
+        individual_rep = out_path.with_name(f"{out_path.stem}.report.json")
         orch = Orchestrator(
             input_path=str(pdf_path),
             output_path=str(out_path),
-            report_path=str(report_path) if report_path else None,
+            report_path=str(individual_rep),
             password=args.password,
             resume=args.resume,
             enable_ml=args.enable_ml_fallback,
             allow_size_growth=args.allow_size_growth,
+            allow_break_signatures=getattr(args, "allow_break_signatures", True),
             steer_dsl=getattr(args, "steer", None),
+            dewarp=getattr(args, "dewarp", False),
+            mode=mode_str,
         )
         code = orch.execute()
-        if code == 0:
-            successes += 1
-        elif code == 10:
-            partials += 1
-        else:
-            errors += 1
+        f_elapsed = int((time.monotonic() - f_t0) * 1000)
+
+        # Parse counts from written individual report if available
+        counts = CountsReport(total=1)
+        if individual_rep.exists():
+            try:
+                import json
+
+                doc_rep = json.loads(individual_rep.read_text(encoding="utf-8"))
+                counts = CountsReport.model_validate(doc_rep.get("counts", {}))
+            except Exception:
+                pass
+            if not getattr(args, "report", None):
+                individual_rep.unlink(missing_ok=True)
+
+        status_str = (
+            "CLEAN"
+            if code == 0
+            else ("PARTIAL" if code == 10 else ("UNVERIFIED" if code == 15 else "ERROR"))
+        )
+        return BatchFileSummary(
+            file=str(pdf_path),
+            out_file=str(out_path) if out_path.exists() else None,
+            exit=code,
+            status=status_str,
+            total_pages=counts.total,
+            exact=counts.exact,
+            verified=counts.verified,
+            untouched=counts.untouched,
+            flagged=counts.flagged,
+            unverified=counts.unverified,
+            elapsed_ms=f_elapsed,
+        )
+
+    if max_workers > 1 and total > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_process_one, p): p for p in pdf_files}
+            for fut in as_completed(futures):
+                summary = fut.result()
+                file_summaries.append(summary)
+                if summary.exit == 0:
+                    successes += 1
+                elif summary.exit == 10:
+                    partials += 1
+                elif summary.exit == 15:
+                    unverifieds += 1
+                else:
+                    errors += 1
+    else:
+        for pdf_path in pdf_files:
+            summary = _process_one(pdf_path)
+            file_summaries.append(summary)
+            if summary.exit == 0:
+                successes += 1
+            elif summary.exit == 10:
+                partials += 1
+            elif summary.exit == 15:
+                unverifieds += 1
+            else:
+                errors += 1
+
+    file_summaries.sort(key=lambda s: s.file)
+    total_ms = int((time.monotonic() - t_start) * 1000)
+
+    # Write aggregate batch report if requested
+    if args.report:
+        rep_p = Path(args.report)
+        batch_exit = (
+            40 if errors > 0 else (15 if unverifieds > 0 else (10 if partials > 0 else 0))
+        )
+        batch_rep = BatchReport(
+            mode=ExecutionMode(mode_str),
+            input_dir=str(in_dir),
+            output_dir=str(out_dir),
+            total_files=total,
+            success_count=successes,
+            partial_count=partials,
+            unverified_count=unverifieds,
+            error_count=errors,
+            elapsed_ms=total_ms,
+            exit_code=batch_exit,
+            files=file_summaries,
+        )
+        tmp_rep = rep_p.with_name(f"{rep_p.name}.tmp.{os.getpid()}")
+        tmp_rep.write_text(batch_rep.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp_rep, rep_p)
 
     print(
-        f"Batch completed: {total} files | SUCCESS={successes} | PARTIAL={partials} | ERRORS={errors}"
+        f"Batch completed: {total} files | SUCCESS={successes} | PARTIAL={partials} | UNVERIFIED={unverifieds} | ERRORS={errors} | time={total_ms / 1000:.1f}s"
     )
     if errors > 0:
         return 40
+    if unverifieds > 0:
+        return 15
     if partials > 0:
         return 10
     return 0
+
 
 
 def _cmd_peek(args: argparse.Namespace) -> int:

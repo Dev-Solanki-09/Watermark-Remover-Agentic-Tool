@@ -48,6 +48,7 @@ mcp = MCPServer(
 def remove_watermark_auto(
     file_path: str,
     output_path: Optional[str] = None,
+    mode: str = "adaptive",
     preserve_scientific_topology: bool = True,
 ) -> Dict[str, Any]:
     """Universal watermark, stamp, seal, and background overlay remover for PDFs, scanned documents, scientific diagrams, chemical structures, and photographs.
@@ -59,6 +60,7 @@ def remove_watermark_auto(
     Args:
         file_path: Absolute or relative path to the input PDF or document image.
         output_path: Optional destination path for the cleaned PDF. If omitted, generates '<file>_cleaned.pdf'.
+        mode: Execution mode: 'fast', 'accurate', 'adaptive' (default), or 'hybrid'.
         preserve_scientific_topology: If True, enforces Betti-number loop invariance (Δβ1=0) on chemical rings and circuit diagrams.
 
     Returns:
@@ -86,6 +88,7 @@ def remove_watermark_auto(
             input_path=str(in_p),
             output_path=str(out_p),
             report_path=str(rep_p),
+            mode=mode,
         )
         exit_code = orch.execute()
 
@@ -98,7 +101,13 @@ def remove_watermark_auto(
 
         pages = report_data.get("pages", [])
         counts = report_data.get("counts", {})
-        cleaned_count = counts.get("clean_exact", 0) + counts.get("clean_verified", 0)
+        # Map both current schema ('exact', 'verified') and legacy keys ('clean_exact', 'clean_verified')
+        cleaned_count = (
+            counts.get("exact", 0)
+            + counts.get("verified", 0)
+            + counts.get("clean_exact", 0)
+            + counts.get("clean_verified", 0)
+        )
 
         # Average verified residual
         residuals = [p.get("res", 0.0) for p in pages if p.get("res") is not None]
@@ -108,8 +117,9 @@ def remove_watermark_auto(
             "success": exit_code == ExitCode.SUCCESS.value,
             "status": "CLEAN" if exit_code == 0 else ("UNVERIFIED" if exit_code == 15 else "PARTIAL"),
             "exit_code": exit_code,
+            "mode": mode,
             "input_file": str(in_p),
-            "output_file": str(out_p) if exit_code == 0 else None,
+            "output_file": str(out_p) if out_p.exists() else None,
             "total_pages": len(pages),
             "cleaned_pages": cleaned_count,
             "untouched_pages": counts.get("untouched", 0),
@@ -243,11 +253,242 @@ def benchmark_page(file_path: str, page_number: int = 1) -> Dict[str, Any]:
         "outside_mask_pixel_diff": v_res.outside_mask_diff,
         "topological_betti_invariance": {
             "passed": t_pass,
-            "delta_beta_0_components": db0,
+            "delta_betti_1_components": db0,
             "delta_beta_1_closed_loops": db1,
             "summary": t_msg,
         },
     }
+
+
+@mcp.tool()
+def inspect_watermark_scorecard(
+    file_path: str,
+    page_number: int = 1,
+    mode: str = "adaptive",
+) -> Dict[str, Any]:
+    """Generates an objective forensic before-and-after audit scorecard for a specific page.
+
+    Quantifies detected watermark properties before treatment (energy, estimated alpha, carrier types,
+    vector counts), and measures post-treatment residual energy, content loss, and topological/spectral
+    invariance (Betti loops, skeleton retention, dangling tips, gradient magnitude, DCT halo variance).
+
+    Args:
+        file_path: Path to the input PDF or document image.
+        page_number: 1-indexed page number to evaluate (default 1).
+        mode: Execution mode ('fast', 'accurate', 'adaptive', 'hybrid').
+
+    Returns:
+        Structured audit scorecard containing detected_before and detected_after metrics.
+    """
+    import gc
+
+    in_p = Path(file_path).resolve()
+    if not in_p.exists():
+        return {"error": f"File not found: {file_path}"}
+
+    import cv2
+    import numpy as np
+
+    from wmclean.verify.hardened_math_qa import evaluate_four_invariant_qa
+    from wmclean.verify.raster import verify_raster
+
+    ext = in_p.suffix.lower()
+    is_pdf = ext == ".pdf"
+
+    detected_before: Dict[str, Any] = {}
+    detected_after: Dict[str, Any] = {}
+
+    if not is_pdf:
+        img = cv2.imread(str(in_p))
+        if img is None:
+            return {"error": f"Failed to read image file: {file_path}"}
+        orig_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+
+        from wmclean.removers.two_regime import two_regime_fill
+
+        cleaned = two_regime_fill(img)
+        clean_grey = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY) if len(cleaned.shape) == 3 else cleaned
+
+        v_res = verify_raster(img, cleaned)
+        qa_res = evaluate_four_invariant_qa(orig_grey, clean_grey)
+
+        detected_before = {
+            "page_kind": "raster_image",
+            "carriers": ["raster_layer"],
+            "estimated_alpha": 0.0,
+            "watermark_energy": round(float(v_res.residual), 4),
+            "ocr_piracy_spans": 0,
+            "vector_text_count": 0,
+            "vector_path_count": 0,
+        }
+        detected_after = {
+            "verification_passed": v_res.passed,
+            "watermark_residual": v_res.residual,
+            "foreground_content_loss": v_res.content_loss,
+            "outside_mask_pixel_diff": v_res.outside_mask_diff,
+            "four_invariant_qa": {
+                "passed": qa_res.passed,
+                "delta_betti_1_loops": qa_res.betti_1_delta,
+                "skeleton_retention_pct": round(qa_res.skeleton_length_retention * 100.0, 2),
+                "dangling_tip_delta": qa_res.dangling_endpoint_delta,
+                "residual_gradient_magnitude": round(qa_res.residual_wm_energy, 4),
+                "dct_halo_variance": round(qa_res.dct_boundary_halo_var, 4),
+                "failure_reasons": list(qa_res.failure_reasons),
+            },
+            "methods_applied": ["two_regime_fill"],
+        }
+        del img, cleaned, orig_grey, clean_grey
+        gc.collect()
+        return {
+            "file": str(in_p),
+            "page": 1,
+            "mode": mode,
+            "status": "VERIFIED" if v_res.passed else "UNVERIFIED",
+            "detected_before": detected_before,
+            "detected_after": detected_after,
+        }
+
+    # PDF Processing:
+    import pymupdf
+
+    with pymupdf.open(str(in_p)) as doc:
+        if page_number < 1 or page_number > len(doc):
+            return {"error": f"Page number {page_number} out of range (1..{len(doc)})"}
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_p = Path(tmp_dir)
+        single_in_pdf = tmp_p / "single_in.pdf"
+        single_out_pdf = tmp_p / "single_out.pdf"
+        single_rep_json = tmp_p / "single_rep.json"
+
+        # Extract only the targeted page to minimize CPU/RAM overhead
+        with pymupdf.open(str(in_p)) as doc:
+            single_doc = pymupdf.open()
+            single_doc.insert_pdf(doc, from_page=page_number - 1, to_page=page_number - 1)
+            single_doc.save(str(single_in_pdf))
+            single_doc.close()
+
+        # Probe the extracted single page
+        try:
+            records = probe_document(str(single_in_pdf))
+            rec = records[0] if records else None
+        except Exception:
+            rec = None
+
+        carriers: list[str] = []
+        est_alpha = 0.0
+        tmpl_ncc = 0.0
+        ocr_spans = 0
+        vec_texts = 0
+        vec_paths = 0
+        page_kind = "unknown"
+
+        if rec is not None:
+            page_kind = rec.kind.value
+            if rec.annots:
+                carriers.append("annot")
+            if rec.ocgs:
+                carriers.append("ocg")
+            if rec.artifacts:
+                carriers.append("artifact")
+            if rec.text_cand:
+                carriers.append("vector_text")
+                vec_texts = len(rec.text_cand)
+            if rec.path_cand:
+                carriers.append("vector_path")
+                vec_paths = len(rec.path_cand)
+            if rec.xobj_cand:
+                carriers.append("xobject")
+            if rec.ras_stats:
+                est_alpha = rec.ras_stats.est_alpha
+                tmpl_ncc = rec.ras_stats.tmpl_ncc
+                ocr_spans = rec.ras_stats.ocr_spans
+
+        detected_before = {
+            "page_kind": page_kind,
+            "carriers": carriers,
+            "estimated_alpha": round(float(est_alpha), 4),
+            "watermark_energy": round(float(tmpl_ncc), 4),
+            "ocr_piracy_spans": ocr_spans,
+            "vector_text_count": vec_texts,
+            "vector_path_count": vec_paths,
+        }
+
+        # Run Orchestrator on the single page
+        orch = Orchestrator(
+            input_path=str(single_in_pdf),
+            output_path=str(single_out_pdf),
+            report_path=str(single_rep_json),
+            mode=mode,
+        )
+        orch_exit = orch.execute()
+
+        methods_applied: list[str] = []
+        page_st = "UNVERIFIED"
+        if single_rep_json.exists():
+            try:
+                rep_data = json.loads(single_rep_json.read_text(encoding="utf-8"))
+                pages = rep_data.get("pages", [])
+                if pages:
+                    p0 = pages[0]
+                    methods_applied = p0.get("m", [])
+                    page_st = p0.get("st", "UNVERIFIED")
+            except Exception:
+                pass
+
+        # Render original and treated pages for independent 4-invariant QA verification
+        with pymupdf.open(str(single_in_pdf)) as orig_d:
+            pix_orig = orig_d[0].get_pixmap(dpi=150)
+            orig_img = np.frombuffer(pix_orig.samples, dtype=np.uint8).reshape(pix_orig.h, pix_orig.w, pix_orig.n)
+            if pix_orig.n == 4:
+                orig_img = orig_img[:, :, :3]
+            elif pix_orig.n == 1:
+                orig_img = np.stack([orig_img, orig_img, orig_img], axis=2)
+
+        treated_file = single_out_pdf if single_out_pdf.exists() else single_in_pdf
+        with pymupdf.open(str(treated_file)) as treat_d:
+            pix_treat = treat_d[0].get_pixmap(dpi=150)
+            clean_img = np.frombuffer(pix_treat.samples, dtype=np.uint8).reshape(pix_treat.h, pix_treat.w, pix_treat.n)
+            if pix_treat.n == 4:
+                clean_img = clean_img[:, :, :3]
+            elif pix_treat.n == 1:
+                clean_img = np.stack([clean_img, clean_img, clean_img], axis=2)
+
+        orig_grey = cv2.cvtColor(orig_img, cv2.COLOR_RGB2GRAY)
+        clean_grey = cv2.cvtColor(clean_img, cv2.COLOR_RGB2GRAY)
+
+        v_res = verify_raster(orig_img, clean_img)
+        qa_res = evaluate_four_invariant_qa(orig_grey, clean_grey)
+
+        detected_after = {
+            "verification_passed": v_res.passed and (orch_exit == 0),
+            "watermark_residual": v_res.residual,
+            "foreground_content_loss": v_res.content_loss,
+            "outside_mask_pixel_diff": v_res.outside_mask_diff,
+            "four_invariant_qa": {
+                "passed": qa_res.passed,
+                "delta_betti_1_loops": qa_res.betti_1_delta,
+                "skeleton_retention_pct": round(qa_res.skeleton_length_retention * 100.0, 2),
+                "dangling_tip_delta": qa_res.dangling_endpoint_delta,
+                "residual_gradient_magnitude": round(qa_res.residual_wm_energy, 4),
+                "dct_halo_variance": round(qa_res.dct_boundary_halo_var, 4),
+                "failure_reasons": list(qa_res.failure_reasons),
+            },
+            "methods_applied": methods_applied,
+        }
+
+        del orig_img, clean_img, orig_grey, clean_grey
+        gc.collect()
+
+        return {
+            "file": str(in_p),
+            "page": page_number,
+            "mode": mode,
+            "status": page_st,
+            "detected_before": detected_before,
+            "detected_after": detected_after,
+        }
+
 
 
 @mcp.tool()

@@ -163,6 +163,7 @@ def update_page_image(
     xobj_name: str,
     new_img: np.ndarray,
     is_bitonal: bool = False,
+    detach_smask: bool = True,
 ) -> None:
     """Replace an Image XObject in a page's /Resources dictionary (or nested Form XObjects) with an encoded stream."""
     resources = page.get("/Resources")
@@ -188,12 +189,15 @@ def update_page_image(
                 )
                 encoded = encode_image(pdf, new_img, orig_xobj=resolved, is_bitonal=is_bitonal)
                 if resolved is not None:
-                    for meta_key in ("/Intent", "/Interpolate", "/SMask", "/Decode"):
+                    for meta_key in ("/Intent", "/Interpolate", "/Decode"):
                         if meta_key in resolved:
                             encoded[meta_key] = resolved[meta_key]
+                    if not detach_smask and "/SMask" in resolved:
+                        encoded["/SMask"] = resolved["/SMask"]
                 xo[k] = encoded
                 logger.debug("update_page_image: replaced XObject %s (%dx%d)", k, new_img.shape[1], new_img.shape[0])
                 return True
+
 
             # Recurse into Form XObjects
             sub_xo = xo.get(k)

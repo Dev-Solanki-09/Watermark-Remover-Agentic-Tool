@@ -54,3 +54,17 @@ def test_remove_watermark_auto(sample_test_pdf: Path, tmp_path: Path):
     assert res["exit_code"] == 0
     assert res["status"] == "CLEAN"
     assert out_path.exists()
+
+
+def test_inspect_watermark_scorecard(sample_test_pdf: Path):
+    """inspect_watermark_scorecard must return detected_before and detected_after scorecard metrics."""
+    from wmclean.mcp_server import inspect_watermark_scorecard
+
+    res = inspect_watermark_scorecard(str(sample_test_pdf), page_number=1, mode="fast")
+    assert "error" not in res
+    assert "detected_before" in res
+    assert "detected_after" in res
+    assert "page_kind" in res["detected_before"]
+    assert "four_invariant_qa" in res["detected_after"]
+    assert "skeleton_retention_pct" in res["detected_after"]["four_invariant_qa"]
+

@@ -17,6 +17,102 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
+class ExecutionMode(str, enum.Enum):
+    """The four first-class execution modes."""
+
+    FAST = "fast"
+    ACCURATE = "accurate"
+    ADAPTIVE = "adaptive"
+    HYBRID = "hybrid"
+
+
+class VerificationStatus(str, enum.Enum):
+    """Unified machine-readable verification status model."""
+
+    VERIFIED = "VERIFIED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    UNVERIFIED = "UNVERIFIED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+class ExecutionPolicy(BaseModel):
+    """Shared execution-policy contract across CLI, MCP, and programmatic APIs."""
+
+    mode: ExecutionMode = ExecutionMode.ADAPTIVE
+    version: str = "1.0"
+    allow_llm: bool = False
+    max_passes: int = 2
+    evaluate_multiple_candidates: bool = False
+    candidate_limit: int = 1
+    per_page_budget_ms: int = 5000
+    per_doc_budget_ms: int = 60000
+    max_memory_mb: int = 1024
+    max_workers: int = 1
+    enable_dewarp: bool = False
+    enable_ml: bool = False
+    allow_size_growth: bool = False
+    allow_break_signatures: bool = True
+    enforce_four_invariants: bool = True
+
+    @classmethod
+    def for_mode(
+        cls,
+        mode: ExecutionMode | str = ExecutionMode.ADAPTIVE,
+        **overrides: Any,
+    ) -> ExecutionPolicy:
+        """Create a validated execution policy tuned for the chosen execution mode."""
+        if isinstance(mode, str):
+            mode = ExecutionMode(mode.lower())
+
+        if mode == ExecutionMode.FAST:
+            base = {
+                "mode": ExecutionMode.FAST,
+                "allow_llm": False,
+                "max_passes": 1,
+                "evaluate_multiple_candidates": False,
+                "candidate_limit": 1,
+                "per_page_budget_ms": 1500,
+                "per_doc_budget_ms": 30000,
+                "enforce_four_invariants": False,
+            }
+        elif mode == ExecutionMode.ACCURATE:
+            base = {
+                "mode": ExecutionMode.ACCURATE,
+                "allow_llm": True,
+                "max_passes": 3,
+                "evaluate_multiple_candidates": False,
+                "candidate_limit": 1,
+                "per_page_budget_ms": 12000,
+                "per_doc_budget_ms": 120000,
+                "enforce_four_invariants": True,
+            }
+        elif mode == ExecutionMode.HYBRID:
+            base = {
+                "mode": ExecutionMode.HYBRID,
+                "allow_llm": True,
+                "max_passes": 2,
+                "evaluate_multiple_candidates": True,
+                "candidate_limit": 4,
+                "per_page_budget_ms": 15000,
+                "per_doc_budget_ms": 180000,
+                "enforce_four_invariants": True,
+            }
+        else:  # ADAPTIVE (default)
+            base = {
+                "mode": ExecutionMode.ADAPTIVE,
+                "allow_llm": False,  # Only permitted if page complexity escalates
+                "max_passes": 2,
+                "evaluate_multiple_candidates": False,
+                "candidate_limit": 1,
+                "per_page_budget_ms": 5000,
+                "per_doc_budget_ms": 60000,
+                "enforce_four_invariants": True,
+            }
+        base.update(overrides)
+        return cls.model_validate(base)
+
+
 class PageKind(str, enum.Enum):
     """Axis-1 page base classification."""
 
@@ -35,6 +131,16 @@ class PageState(str, enum.Enum):
     UNTOUCHED = "UNTOUCHED"
     FLAGGED = "FLAGGED"
     UNVERIFIED = "UNVERIFIED"
+
+    def to_verification_status(self) -> VerificationStatus:
+        """Map PageState to unified VerificationStatus."""
+        if self in (PageState.CLEAN_EXACT, PageState.CLEAN_VERIFIED):
+            return VerificationStatus.VERIFIED
+        if self == PageState.UNTOUCHED:
+            return VerificationStatus.SKIPPED
+        if self == PageState.FLAGGED:
+            return VerificationStatus.REVIEW_REQUIRED
+        return VerificationStatus.UNVERIFIED
 
 
 class CarrierFlag(str, enum.Enum):
@@ -498,6 +604,7 @@ class DocumentReport(BaseModel):
     """Top-level r.json schema (version 1.0)."""
 
     v: str = "1.0"
+    mode: ExecutionMode = ExecutionMode.ADAPTIVE
     input: str = Field(alias="in", serialization_alias="in")
     out: str
     sha256_in: str = ""
@@ -512,3 +619,38 @@ class DocumentReport(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
+
+
+class BatchFileSummary(BaseModel):
+    """Per-file outcome in aggregate batch report."""
+
+    file: str
+    out_file: Optional[str] = None
+    exit: int
+    status: str
+    total_pages: int = 0
+    exact: int = 0
+    verified: int = 0
+    untouched: int = 0
+    flagged: int = 0
+    unverified: int = 0
+    elapsed_ms: int = 0
+    error: Optional[str] = None
+
+
+class BatchReport(BaseModel):
+    """Top-level batch report schema."""
+
+    v: str = "1.0"
+    mode: ExecutionMode = ExecutionMode.ADAPTIVE
+    input_dir: str
+    output_dir: str
+    total_files: int = 0
+    success_count: int = 0
+    partial_count: int = 0
+    unverified_count: int = 0
+    error_count: int = 0
+    elapsed_ms: int = 0
+    exit_code: int = 0
+    files: list[BatchFileSummary] = Field(default_factory=list)
+

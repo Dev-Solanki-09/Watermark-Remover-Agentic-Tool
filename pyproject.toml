@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watermark-remover-auto-agent-tool"
-version = "0.0.12b0"
+version = "0.1.6b0"
 description = "Local CPU-focused PDF forensic engine and agent-native surgical actuator"
 readme = "README.md"
 license = "MIT"

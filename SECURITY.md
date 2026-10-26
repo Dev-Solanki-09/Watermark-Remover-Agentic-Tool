@@ -6,8 +6,8 @@ We provide active security updates, vulnerability patches, and bug fixes for the
 
 | Version | Supported |
 | :--- | :---: |
-| `0.0.12-beta` (`0.0.12b0`) | :white_check_mark: |
-| `< 0.0.12-beta` | :x: |
+| `0.1.6-beta` (`0.1.6b0`) | :white_check_mark: |
+| `< 0.1.6-beta` | :x: |
 
 ---
 

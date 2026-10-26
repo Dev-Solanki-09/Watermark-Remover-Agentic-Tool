@@ -1,6 +1,6 @@
 # Watermark-Remover-Agentic-Tool (`wmclean`)
 
-[![Version](https://img.shields.io/badge/version-0.0.12--beta-blue.svg)](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/releases)
+[![Version](https://img.shields.io/badge/version-0.1.6--beta-blue.svg)](https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/releases)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CPU-Only](https://img.shields.io/badge/hardware-CPU--only-success.svg)]()
@@ -175,7 +175,7 @@ wmclean run document.pdf -o cleaned.pdf --report report.json
 ```
 Output:
 ```
-WMCLEAN v0.0.12b0 | document.pdf -> cleaned.pdf | status=OK (exit 0)
+WMCLEAN v0.1.6b0 | document.pdf -> cleaned.pdf | status=OK (exit 0)
 pages=12 | CLEAN_EXACT=10 | CLEAN_VERIFIED=2 | UNTOUCHED=0 | FLAGGED=0
 size_in=1.4MB | size_out=1.2MB (0.86x) | time=1.8s | ram_peak=142MB | llm_calls=0
 report=report.json

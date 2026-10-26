@@ -3342,7 +3342,7 @@ wheels = [
 
 [[package]]
 name = "watermark-remover-auto-agent-tool"
-version = "0.0.12b0"
+version = "0.1.6b0"
 source = { editable = "." }
 dependencies = [
     { name = "deskew" },

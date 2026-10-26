@@ -148,3 +148,6 @@ We gratefully acknowledge the developers of existing open-source PDF watermark r
 - **[watermark-remover-cli](https://pypi.org/project/watermark-remover-cli)** for HSV saturation separation.
 - The authors and maintainers of **[pikepdf](https://github.com/pikepdf/pikepdf)**, **[PyMuPDF](https://github.com/pymupdf/PyMuPDF)**, and **[qpdf](https://github.com/qpdf/qpdf)**.
 
+For our complete technical credits, research paper citations, and open-source software attribution, please refer to [CREDITS.md](CREDITS.md).
+
+

@@ -14,6 +14,7 @@ Watermark-Remover-Agentic-Tool (`wmclean`) is an open-source, deterministic docu
 ## Documentation
 - [Agent Contract & Execution](AGENTS.md): Fast-path execution commands, exit code contract, and code architecture jump table.
 - [Empirical Benchmarks](BENCHMARKS.md): Systematic benchmark evaluations on Devanagari script, benzene rings, and electronic schematics across 15% to 55% watermark opacities.
+- [Technical Credits & Attribution](CREDITS.md): Full citations, research papers, and open-source software attribution.
 - [MCP Registry Definition](server.json): Official Model Context Protocol schema and tool definitions.
 
 ## MCP Tools
@@ -25,6 +26,8 @@ Watermark-Remover-Agentic-Tool (`wmclean`) is an open-source, deterministic docu
 - `wmclean run <in.pdf> -o <out.pdf> --report <r.json>`: Single-file processing with JSON audit report.
 - `wmclean plan <in.pdf>`: Dry-run planning and layer diagnosis without modifying the document.
 - `wmclean batch <in_dir> -o <out_dir> --resume`: Resume-capable multi-document batch execution.
+- `wmclean dewarp <in.pdf> -o <out.pdf>`: Standalone zero-crop geometric dewarping & deskewing.
+- `wmclean peek <in.pdf> -p <page>`: Semantic zero-vision ASCII page map and anomaly inspector.
 - `wmclean doctor`: Environment and optional dependency healthcheck.
 
 ## Optional Dependencies

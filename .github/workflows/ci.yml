@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
@@ -41,3 +45,29 @@ jobs:
 
       - name: Run test suite
         run: python -m pytest -q --tb=line --no-header
+
+      - name: End-to-end smoke test
+        run: python -c "from tests.fixture_gen import ALL_FIXTURE_GENERATORS; from wmclean.cli import main; from pathlib import Path; import os; p, _, _ = ALL_FIXTURE_GENERATORS['FX_G01'](Path('fixtures')); code = main(['run', str(p), '-o', 'smoke_out.pdf', '--report', 'smoke_report.json']); assert code == 0, f'Exit {code}'; assert Path('smoke_out.pdf').exists(); assert Path('smoke_report.json').exists(); [os.remove(f) for f in ('smoke_out.pdf', 'smoke_report.json') if os.path.exists(f)]; print('SMOKE TEST PASSED (exit 0)')"
+
+  dist:
+    name: Package Build & Distribution Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install build and packaging tools
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Validate package distribution metadata
+        run: python -m twine check --strict dist/*
+

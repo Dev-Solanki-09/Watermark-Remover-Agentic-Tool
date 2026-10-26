@@ -26,6 +26,17 @@ from wmclean.schemas import (
 # Each rule is a tuple of (required_flags, chain, base_confidence).
 # Rules are evaluated in priority order; the first match ≥ 0.85 wins.
 _RULES: list[tuple[set[str], list[RemoverMethod], float]] = [
+    # G00: Multi-carrier vector watermarks (annotations / OCG / artifacts)
+    (
+        {CarrierFlag.ARTIFACT_WM.value, CarrierFlag.ANNOT_STAMP.value},
+        [RemoverMethod.ANNOT_DEL, RemoverMethod.ARTIFACT_STRIP],
+        0.99,
+    ),
+    (
+        {CarrierFlag.ARTIFACT_WM.value, CarrierFlag.OCG.value},
+        [RemoverMethod.OCG_STRIP, RemoverMethod.ARTIFACT_STRIP],
+        0.99,
+    ),
     # G01: Annotation watermarks — highest confidence, simplest removal
     (
         {CarrierFlag.ANNOT_WM.value},
@@ -42,16 +53,16 @@ _RULES: list[tuple[set[str], list[RemoverMethod], float]] = [
         [RemoverMethod.ANNOT_DEL],
         0.95,
     ),
+    # G03: Marked-content artifacts (verified in page content stream)
+    (
+        {CarrierFlag.ARTIFACT_WM.value},
+        [RemoverMethod.ARTIFACT_STRIP],
+        0.985,
+    ),
     # G02: OCG layers
     (
         {CarrierFlag.OCG.value},
         [RemoverMethod.OCG_STRIP],
-        0.98,
-    ),
-    # G03: Marked-content artifacts
-    (
-        {CarrierFlag.ARTIFACT_WM.value},
-        [RemoverMethod.ARTIFACT_STRIP],
         0.98,
     ),
     # G04: Vector text watermarks

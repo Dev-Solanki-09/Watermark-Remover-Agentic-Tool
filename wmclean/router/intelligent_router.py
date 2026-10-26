@@ -217,25 +217,46 @@ class IntelligentRouter:
                 )
             tasks.append(MethodTask(method=RemoverMethod.SMASK_GS_STRIP, confidence=0.92))
 
+        elif mod == WatermarkModality.ARTIFACT_MARKED_CONTENT:
+            if not record.artifacts and not record.annots and not record.ocgs:
+                return PageDispatchPlan(
+                    page=p_num,
+                    subdoc_id=s_id,
+                    tasks=[],
+                    reason="Negative presence veto: marked content artifacts absent on this page",
+                )
+            if record.annots:
+                tasks.append(MethodTask(method=RemoverMethod.ANNOT_DEL, confidence=0.99))
+            if record.ocgs:
+                tasks.append(MethodTask(method=RemoverMethod.OCG_STRIP, confidence=0.98))
+            if record.artifacts:
+                tasks.append(MethodTask(method=RemoverMethod.ARTIFACT_STRIP, confidence=0.98))
+
         elif mod == WatermarkModality.ANNOTATION_STAMP:
-            if not record.annots:
+            if not record.annots and not record.artifacts:
                 return PageDispatchPlan(
                     page=p_num,
                     subdoc_id=s_id,
                     tasks=[],
                     reason="Negative presence veto: annotations absent on this page",
                 )
-            tasks.append(MethodTask(method=RemoverMethod.ANNOT_DEL, confidence=0.99))
+            if record.annots:
+                tasks.append(MethodTask(method=RemoverMethod.ANNOT_DEL, confidence=0.99))
+            if record.artifacts:
+                tasks.append(MethodTask(method=RemoverMethod.ARTIFACT_STRIP, confidence=0.98))
 
         elif mod == WatermarkModality.OCG_LAYER:
-            if not record.ocgs:
+            if not record.ocgs and not record.artifacts:
                 return PageDispatchPlan(
                     page=p_num,
                     subdoc_id=s_id,
                     tasks=[],
                     reason="Negative presence veto: OCG layers absent on this page",
                 )
-            tasks.append(MethodTask(method=RemoverMethod.OCG_STRIP, confidence=0.98))
+            if record.ocgs:
+                tasks.append(MethodTask(method=RemoverMethod.OCG_STRIP, confidence=0.98))
+            if record.artifacts:
+                tasks.append(MethodTask(method=RemoverMethod.ARTIFACT_STRIP, confidence=0.98))
 
         elif mod == WatermarkModality.SCANNER_MARGIN_BANNER:
             has_margin = any(

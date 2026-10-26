@@ -420,14 +420,12 @@ class VerificationEngine:
 
                 if v_result.passed:
                     methods_applied.append(method.value)
-                    state = (
-                        PageState.CLEAN_EXACT
-                        if page_kind == PageKind.VECTOR
-                        else PageState.CLEAN_VERIFIED
-                    )
-                    logger.info("Page %d passed verification using %s", page_idx + 1, method.value)
-                    orig_pdf_copy.close()
-                    return state, methods_applied, v_result
+                    last_result = v_result
+                    orig_contents_bytes = _get_page_contents(page)
+                    orig_annots = page.get("/Annots")
+                    orig_annots_copy = pikepdf.Array(orig_annots) if orig_annots is not None else None
+                    logger.info("Page %d vector step passed verification using %s", page_idx + 1, method.value)
+                    continue
                 else:
                     logger.warning(
                         "Page %d remover %s failed verification (%s, code=%s); rolling back",
@@ -608,6 +606,15 @@ class VerificationEngine:
             else:
                 last_result = v_res
                 last_result.diagnostic_images = (orig_arr.copy(), cascade_arr.copy())
+
+        if methods_applied:
+            state = (
+                PageState.CLEAN_EXACT
+                if page_kind == PageKind.VECTOR
+                else PageState.CLEAN_VERIFIED
+            )
+            orig_pdf_copy.close()
+            return state, methods_applied, last_result
 
         orig_pdf_copy.close()
         # If all removers failed verification, leave page completely untouched

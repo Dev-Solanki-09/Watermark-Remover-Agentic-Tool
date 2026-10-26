@@ -17,31 +17,53 @@ This skill allows AI coding agents and autonomous workflows to inspect, diagnose
 
 Run commands directly via shell:
 ```bash
-# 1. Preview and plan without modifying the file
-wmclean plan <input.pdf>
+# 1. Preview and plan without modifying the file (sub-second dry-run)
+wmclean plan <input.pdf> [--json plan.json]
 
-# 2. Clean single PDF with audit report
-wmclean run <input.pdf> -o <output.pdf> --report report.json
+# 2. Clean single PDF with audit report and optional dewarping/steering
+wmclean run <input.pdf> -o <output.pdf> --report report.json [--dewarp] [--steer <dsl>]
 
-# 3. Batch clean an entire directory with resume capability
-wmclean batch <input_dir> -o <output_dir> --resume
+# 3. Batch clean an entire directory with resume checkpointing
+wmclean batch <input_dir> -o <output_dir> --report batch_report.json --resume
 
-# 4. Inspect specific page crop or diff
-wmclean peek <input.pdf> -p 1 -o crop.png
+# 4. Standalone zero-crop geometric dewarping and deskewing
+wmclean dewarp <input.pdf> -o <output.pdf> [--mode auto|skew|gutter|bump]
 
-# 5. Healthcheck environment and available vision removers
+# 5. Semantic zero-vision ASCII page map and anomaly inspector (<85 tokens)
+wmclean peek <input.pdf> -p 1 [--crop-roi <box>] [-o crop.png]
+
+# 6. Sub-second interactive time-travel re-steering via SQLite delta ledger
+wmclean steer <input.pdf> -s <dsl> [-o <output.pdf>]
+
+# 7. Pre-flight healthcheck for dependencies, SOTA extensions, and RAM
 wmclean doctor
+
+# 8. Output machine-readable JSON schema for report.json
+wmclean schema
 ```
 
 ## Exit Code Contract & Next Actions
 Always inspect process exit codes:
-- `0` (CLEAN / UNTOUCHED): Output is verified. Zero content loss, text layer intact, residual watermark within bounds.
-- `10` (PARTIAL): At least one page flagged for potential edge degradation. Check `flagged_pages` in stdout or JSON report.
+- `0` (CLEAN / UNTOUCHED): Output is verified. Zero content loss ($\Delta_{\text{text}}=0$), foreground stroke protected, residual watermark within bounds.
+- `10` (PARTIAL): At least one page flagged for potential occlusion or edge risk. Read `flagged_pages` in stdout or JSON report.
 - `15` (UNVERIFIED): Watermark residual or content loss exceeded tolerance bounds. Output was held or reverted. Inspect using `wmclean peek`.
-- `20` (UNSUPPORTED / ENCRYPTED): File is password-protected. Request password from user or provide `--password <pw>`.
-- `30` (CORRUPT): Input file is unrecoverable.
-- `40` (IO ERROR): File path or permissions issue.
-- `50` (INTERNAL): Invariant breach; inspect report JSON.
+- `20` (UNSUPPORTED / ENCRYPTED): File is password-protected or encrypted XFA. Request password from user or pass `--password <pw>`.
+- `30` (CORRUPT): Input file is unrecoverable at PDF syntax level.
+- `40` (IO ERROR): File path, permissions, or disk space exhausted.
+- `50` (INTERNAL): Invariant breach; inspect report JSON `error_detail`.
+
+## Declarative Steering Micro-DSL (`--steer`)
+Direct fine-grained remediation logic across pages and spatial zones without touching code:
+```bash
+wmclean run exam.pdf -o clean.pdf --steer "p1-5@margins:margin_banner; p7@top-left:bilingual_clone; all:strip_text(match='@username|watermark')"
+```
+- **Page Selectors**: `all`, `odd`, `even`, `p5`, `p1-10`
+- **Spatial Zones**: `@top-left`, `@top-right`, `@bottom-left`, `@bottom-right`, `@margins`, `@header`, `@footer`, `@center`, or normalized `@[x1,y1,x2,y2]`
+- **Method Chains**: `bilingual_clone+density_sub`, `hue_unmix(hue=red)`, `density_sub(p=25)`
+- **Meta-Actions**: `skip`, `protect_zone`, `restore_original`, `auto_solve(aggressiveness=0.8)`
+
+## Technical Attribution & Credits
+For full mathematical formulations, citations, research papers, and open-source software credits across all 20+ synthesized libraries, refer to [CREDITS.md](CREDITS.md).
 
 ## MCP Server Integration
 

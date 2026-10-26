@@ -3,8 +3,9 @@
 ## 1. EXECUTION FAST-PATH (STOP: DO NOT READ SOURCE CODE TO RUN THIS TOOL)
 If your task is to remove watermarks from PDF(s), DO NOT explore the codebase. Execute directly:
 - Preview plan: `wmclean plan <in.pdf> [--json <p.json>]`
-- Single file:  `wmclean run <in.pdf> -o <out.pdf> --report <r.json> [--steer <dsl>]`
+- Single file:  `wmclean run <in.pdf> -o <out.pdf> --report <r.json> [--steer <dsl>] [--dewarp]`
 - Batch dir:    `wmclean batch <in_dir> -o <out_dir> --report <r.json> --resume`
+- Dewarp page:  `wmclean dewarp <in.pdf> -o <out.pdf> [--mode auto|skew|gutter|bump]`
 - Page inspect: `wmclean peek <in.pdf> -p <page> [--crop-roi <box> -o <crop.png>]`
 - Time-travel:  `wmclean steer <in.pdf> -s <dsl> [-o <out.pdf>]`
 - Healthcheck:  `wmclean doctor`
@@ -13,6 +14,7 @@ If your task is to remove watermarks from PDF(s), DO NOT explore the codebase. E
 ### Exit Codes & Next Actions (Read ONLY stdout; open `r.json` ONLY if exit != 0)
 - `0`  : CLEAN (`CLEAN_EXACT` / `CLEAN_VERIFIED` / `UNTOUCHED`). Done. Do not inspect `out.pdf`.
 - `10` : PARTIAL (`FLAGGED` pages exist). Read `flagged_pages` lines in stdout.
+- `15` : UNVERIFIED (`UNVERIFIED` pages exist: watermark residual was not successfully removed under verified bounds). Inspect `unverified_pages` lines in stdout.
 - `20` : UNSUPPORTED / ENCRYPTED. Pass `--password <pw>` if known; else report to user.
 - `30` : CORRUPT INPUT PDF. Unrecoverable syntax; report to user.
 - `40` : IO / RESOURCE / CONFIG ERROR. Check disk space or paths; re-run with `--resume`.
@@ -22,6 +24,7 @@ If your task is to remove watermarks from PDF(s), DO NOT explore the codebase. E
 If your task is to fix a bug or add a feature, DO NOT scan the whole repo. Jump straight to:
 - CLI / Exit codes / Stdout cap (<=250 tok) -> `wmclean/cli.py`
 - Streaming / Checkpoints / RAM watchdog    -> `wmclean/orchestrator.py`
+- L-1 Zero-Crop Dewarp & Deskewing          -> `wmclean/geometry/`
 - L0 Page & Raster Probing                  -> `wmclean/probe/`
 - L0.5 Surgical Gatekeeper, ROI-Lock, DocShield -> `wmclean/intelligence/`
 - L1 Signature Clustering & SQLite Cache    -> `wmclean/cluster/`

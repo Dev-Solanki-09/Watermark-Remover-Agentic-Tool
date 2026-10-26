@@ -72,6 +72,9 @@ METHOD_ALIASES: dict[str, str] = {
     "ast_tj": RemoverMethod.AST_TJ_REASSEMBLE.value,
     "annot_del": RemoverMethod.ANNOT_DEL.value,
     "ocg_strip": RemoverMethod.OCG_STRIP.value,
+    "artifact_strip": RemoverMethod.ARTIFACT_STRIP.value,
+    "strip_artifact": RemoverMethod.ARTIFACT_STRIP.value,
+    "artifact": RemoverMethod.ARTIFACT_STRIP.value,
     "lama": RemoverMethod.SURGICAL_LAMA.value,
 }
 

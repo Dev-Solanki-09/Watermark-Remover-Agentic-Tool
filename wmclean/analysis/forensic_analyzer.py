@@ -108,9 +108,33 @@ class ForensicAnalyzer:
         """Profile a single subdocument partition."""
         dominant_kind = self._determine_dominant_kind(subdoc_records)
 
+        # Check for marked content artifacts
+        artifacts = [a for r in subdoc_records for a in r.artifacts]
+        if artifacts:
+            chain = [RemoverMethod.ARTIFACT_STRIP]
+            annots = [a for r in subdoc_records for a in r.annots]
+            if annots:
+                chain.insert(0, RemoverMethod.ANNOT_DEL)
+            ocgs = [o for r in subdoc_records for o in r.ocgs]
+            if ocgs:
+                chain.insert(0, RemoverMethod.OCG_STRIP)
+            return SubdocumentForensicProfile(
+                subdoc_id=s_id,
+                page_indices=p_indices,
+                page_kind=dominant_kind,
+                detected_modality=WatermarkModality.ARTIFACT_MARKED_CONTENT,
+                completeness_score=1.0,
+                is_ambiguous=False,
+                recommended_chain=chain,
+            )
+
         # Check for annotations
         annots = [a for r in subdoc_records for a in r.annots]
         if annots:
+            chain = [RemoverMethod.ANNOT_DEL]
+            ocgs = [o for r in subdoc_records for o in r.ocgs]
+            if ocgs:
+                chain.append(RemoverMethod.OCG_STRIP)
             return SubdocumentForensicProfile(
                 subdoc_id=s_id,
                 page_indices=p_indices,
@@ -118,7 +142,7 @@ class ForensicAnalyzer:
                 detected_modality=WatermarkModality.ANNOTATION_STAMP,
                 completeness_score=1.0,
                 is_ambiguous=False,
-                recommended_chain=[RemoverMethod.ANNOT_DEL],
+                recommended_chain=chain,
             )
 
         # Check for OCG layers

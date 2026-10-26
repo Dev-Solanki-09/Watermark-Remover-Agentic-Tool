@@ -103,7 +103,14 @@ Every page processed through raster or hybrid tiers is subjected to an independe
 - `wmclean run <in.pdf> -o <out.pdf> --report <r.json>`
 - `wmclean plan <in.pdf> [--json <p.json>]`
 - `wmclean batch <in_dir> -o <out_dir> --report <r.json> --resume`
+- `wmclean dewarp <in.pdf> -o <out.pdf> [--mode auto|skew|gutter|bump]`
 - `wmclean peek <in.pdf> -p <page> [-o <crop.png>]`
 - `wmclean steer <in.pdf> -s <dsl> [-o <out.pdf>]`
 - `wmclean doctor`
 - `wmclean schema`
+
+---
+
+## Technical Credits & Attribution
+Full technical attributions, research paper citations, and open-source acknowledgements are documented in [CREDITS.md](CREDITS.md).
+

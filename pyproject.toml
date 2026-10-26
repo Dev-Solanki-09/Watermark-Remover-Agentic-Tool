@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watermark-remover-auto-agent-tool"
-version = "0.0.11b0"
+version = "0.0.12b0"
 description = "Local CPU-focused PDF forensic engine and agent-native surgical actuator"
 readme = "README.md"
 license = "MIT"
@@ -44,6 +44,13 @@ dependencies = [
     "deskew>=1.6.0",
     "page-dewarp>=0.3.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool"
+Documentation = "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool#readme"
+Repository = "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool.git"
+Issues = "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/issues"
+Changelog = "https://github.com/Dev-Solanki-09/Watermark-Remover-Agentic-Tool/releases"
 
 [project.optional-dependencies]
 ml = ["onnxruntime>=1.16"]
